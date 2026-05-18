@@ -1,0 +1,20 @@
+# Google API credentials (sensitive)
+credentials.json
+token.json
+
+# PyInstaller output
+build/
+dist/
+*.spec
+translation_gui_build.py
+
+# Input data (large ZIP files)
+Input_data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude project files
+.claude/
