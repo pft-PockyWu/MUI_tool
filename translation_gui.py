@@ -546,25 +546,45 @@ def _in_ignore(ignore_set: set, module: str, key: str, lang: str) -> bool:
 
 # ── Scan-report → Ignore-table converter ─────────────────────────────────────
 
+def _detect_lang_sheets(xl: "pd.ExcelFile") -> dict:
+    """
+    Return {sheet_name: LANG_CODE} for every language-analysis sheet.
+    Detects by finding the first 2–5 consecutive uppercase letters in the
+    sheet name (e.g. "FIL Extracted", "FIL_Extraction", "HEB_Extraction").
+    Sheet must also contain a Comment column to avoid false positives.
+    """
+    result = {}
+    for name in xl.sheet_names:
+        m = re.search(r'[A-Z]{2,5}', name)
+        if not m:
+            continue
+        try:
+            header = pd.read_excel(xl, sheet_name=name, nrows=0)
+        except Exception:
+            continue
+        cols = [str(c).strip() for c in header.columns]
+        if len(cols) >= 6 and "Comment" in cols:
+            result[name] = m.group(0)
+    return result
+
+
 def convert_scan_to_ignore(input_xlsx: Path, output_xlsx: Path, log) -> int:
     """
     Convert a language scan report to an ignore table Excel.
-    Detects sheets named "<LANG> Extracted"; for each Pass row assigns only
-    that sheet's own language (ignores the 語言 column which may list extras).
+    Auto-detects language sheets via column names or sheet name pattern;
+    for each Pass row assigns only that sheet's own language.
     Returns number of rows written.
     """
     xl = pd.ExcelFile(str(input_xlsx))
 
-    lang_sheets = {}
-    for name in xl.sheet_names:
-        parts = name.strip().split()
-        if len(parts) >= 2 and parts[-1].lower() == "extracted":
-            lang_sheets[name] = parts[0].upper()
+    lang_sheets = _detect_lang_sheets(xl)
 
     if not lang_sheets:
         raise ValueError(
             "找不到語言分析 Sheet。\n"
-            "請確認 Sheet 名稱格式為「<語言> Extracted」，例如：FIL Extracted"
+            "支援的格式（擇一即可）：\n"
+            "  • 欄位名稱含「<語言> Translation」，例如：FIL Translation\n"
+            "  • Sheet 名稱以語言代碼開頭，例如：FIL Extracted、FIL_Extraction"
         )
 
     log(f"🔍 偵測到語言 Sheet: {list(lang_sheets.values())}")
