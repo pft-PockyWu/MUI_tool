@@ -32,6 +32,8 @@ v1.7
 
 UI
   • 全介面配色改為 Catppuccin Mocha 主題（深色、對比層次分明）
+  • 選取中的 App / 模式按鈕改用深色文字（#1e1e2e），確保淺紫背景上可讀
+  • Log / 查詢結果框選取色改為 #313244，消除系統亮藍高亮條
   • 全介面字型改為 Microsoft JhengHei UI（微軟正黑體 UI），中英文顯示更一致
 
 ────────────────────────────────────────
@@ -1231,7 +1233,7 @@ class App(tk.Tk):
             for name, btn in self._app_buttons.items():
                 btn.configure(
                     bg="#cba6f7" if name == last_app else "#313244",
-                    fg="#cdd6f4"  if name == last_app else "#a6adc8"
+                    fg="#1e1e2e"  if name == last_app else "#a6adc8"
                 )
             self._app_var.set(last_app)
             cfg = APP_CONFIGS.get(last_app, {})
@@ -1483,7 +1485,9 @@ class App(tk.Tk):
         ql_result_f.pack(fill="both", expand=True)
         self._ql_result_box = tk.Text(ql_result_f, height=8, bg="#11111b", fg="#cdd6f4",
                                       font=("Courier", 11), relief="flat",
-                                      state="disabled", wrap="word")
+                                      state="disabled", wrap="word",
+                                      selectbackground="#313244", selectforeground="#cdd6f4",
+                                      inactiveselectbackground="#313244")
         ql_sb = ttk.Scrollbar(ql_result_f, command=self._ql_result_box.yview)
         self._ql_result_box.configure(yscrollcommand=ql_sb.set)
         self._ql_result_box.pack(side="left", fill="both", expand=True)
@@ -1580,7 +1584,9 @@ class App(tk.Tk):
         self._log_box = tk.Text(log_f, height=1, bg="#11111b", fg="#cdd6f4",
                                 font=("Courier", 11), relief="flat",
                                 state="disabled", wrap="word",
-                                insertbackground="white")
+                                insertbackground="white",
+                                selectbackground="#313244", selectforeground="#cdd6f4",
+                                inactiveselectbackground="#313244")
         sb = ttk.Scrollbar(log_f, command=self._log_box.yview)
         self._log_box.configure(yscrollcommand=sb.set)
         self._log_box.pack(side="left", fill="both", expand=True)
@@ -1668,8 +1674,8 @@ class App(tk.Tk):
         self._app_var.set(app_name)
         for name, btn in self._app_buttons.items():
             if name == app_name:
-                btn.configure(bg="#cba6f7", fg="#cdd6f4",
-                              activebackground="#b4befe", activeforeground="#cdd6f4")
+                btn.configure(bg="#cba6f7", fg="#1e1e2e",
+                              activebackground="#b4befe", activeforeground="#1e1e2e")
             else:
                 btn.configure(bg="#313244", fg="#a6adc8",
                               activebackground="#45475a", activeforeground="#ffffff")
@@ -1745,8 +1751,8 @@ class App(tk.Tk):
         self._mode_var.set(mode)
         for val, btn in self._mode_buttons.items():
             if val == mode:
-                btn.configure(bg="#cba6f7", fg="#cdd6f4",
-                              activebackground="#b4befe", activeforeground="#cdd6f4")
+                btn.configure(bg="#cba6f7", fg="#1e1e2e",
+                              activebackground="#b4befe", activeforeground="#1e1e2e")
             else:
                 btn.configure(bg="#313244", fg="#6c7086",
                               activebackground="#45475a", activeforeground="#ffffff")
