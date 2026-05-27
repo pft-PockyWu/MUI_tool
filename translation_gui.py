@@ -31,6 +31,7 @@ v1.7
     → FIL Extracted、FIL_Extraction 等命名變體皆可正常執行
 
 UI
+  • 全介面配色改為 Catppuccin Mocha 主題（深色、對比層次分明）
   • 全介面字型改為 Microsoft JhengHei UI（微軟正黑體 UI），中英文顯示更一致
 
 ────────────────────────────────────────
@@ -1170,7 +1171,7 @@ class App(tk.Tk):
         self.title(f"MUI Translation Tool  {APP_VERSION}")
         self.resizable(True, True)
         self.minsize(700, 520)
-        self.configure(bg="#1e1b35")
+        self.configure(bg="#1e1e2e")
         self._cfg = load_config()
         self._zip_path = self._excel_path = self._out_path = None
         self._ignore_path = None
@@ -1180,14 +1181,14 @@ class App(tk.Tk):
         self._ignore_var = tk.StringVar(value="未設定（可選）")
 
         # Scrollable main canvas
-        self._canvas = tk.Canvas(self, bg="#1e1b35", highlightthickness=0)
+        self._canvas = tk.Canvas(self, bg="#1e1e2e", highlightthickness=0)
         self._vscroll = ttk.Scrollbar(self, orient="vertical",
                                       command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=self._vscroll.set)
         self._vscroll.pack(side="right", fill="y")
         self._canvas.pack(side="left", fill="both", expand=True)
 
-        self._inner = tk.Frame(self._canvas, bg="#1e1b35")
+        self._inner = tk.Frame(self._canvas, bg="#1e1e2e")
         self._inner_id = self._canvas.create_window(
             (0, 0), window=self._inner, anchor="nw")
         self._inner.columnconfigure(0, weight=1)
@@ -1229,8 +1230,8 @@ class App(tk.Tk):
             # Re-highlight correct button
             for name, btn in self._app_buttons.items():
                 btn.configure(
-                    bg="#7c6ef5" if name == last_app else "#252040",
-                    fg="#ffffff"  if name == last_app else "#888888"
+                    bg="#cba6f7" if name == last_app else "#313244",
+                    fg="#cdd6f4"  if name == last_app else "#a6adc8"
                 )
             self._app_var.set(last_app)
             cfg = APP_CONFIGS.get(last_app, {})
@@ -1290,23 +1291,23 @@ class App(tk.Tk):
     # ── Layout ───────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        BG = "#1e1b35"
+        BG = "#1e1e2e"
         # ── Title bar ─────────────────────────────────────────────────────────
-        hdr = tk.Frame(self._inner, bg="#0f0c29")
+        hdr = tk.Frame(self._inner, bg="#11111b")
         hdr.pack(fill="x")
-        title_f = tk.Frame(hdr, bg="#0f0c29")
+        title_f = tk.Frame(hdr, bg="#11111b")
         title_f.pack(pady=(14, 2))
         tk.Label(title_f, text="MUI Translation Tool",
-                 font=("Microsoft JhengHei UI", 16, "bold"), fg="#ffffff", bg="#0f0c29").pack(side="left")
+                 font=("Microsoft JhengHei UI", 16, "bold"), fg="#ffffff", bg="#11111b").pack(side="left")
         tk.Label(title_f, text=f" {APP_VERSION}",
-                 font=("Microsoft JhengHei UI", 11, "bold"), fg="#7c6ef5", bg="#0f0c29").pack(side="left", pady=(4,0))
-        sub_f = tk.Frame(hdr, bg="#0f0c29")
+                 font=("Microsoft JhengHei UI", 11, "bold"), fg="#cba6f7", bg="#11111b").pack(side="left", pady=(4,0))
+        sub_f = tk.Frame(hdr, bg="#11111b")
         sub_f.pack(pady=(0, 10))
         tk.Label(sub_f, text=f"by {APP_AUTHOR}",
-                 font=("Microsoft JhengHei UI", 10), fg="#444466", bg="#0f0c29").pack(side="left")
+                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#11111b").pack(side="left")
         tk.Button(sub_f, text="📋 更新記錄",
-                  font=("Microsoft JhengHei UI", 9), fg="#7c6ef5", bg="#0f0c29",
-                  activeforeground="#aaaaff", activebackground="#0f0c29",
+                  font=("Microsoft JhengHei UI", 9), fg="#cba6f7", bg="#11111b",
+                  activeforeground="#cdd6f4", activebackground="#11111b",
                   relief="flat", cursor="hand2", bd=0,
                   command=self._show_changelog).pack(side="left", padx=(12, 0))
 
@@ -1325,7 +1326,7 @@ class App(tk.Tk):
         app_hdr = tk.Frame(left, bg=BG)
         app_hdr.pack(fill="x", pady=(0, 3))
         tk.Label(app_hdr, text="選擇 App：", font=("Microsoft JhengHei UI", 11, "bold"),
-                 fg="#aaaaaa", bg=BG).pack(side="left", padx=(0, 8))
+                 fg="#a6adc8", bg=BG).pack(side="left", padx=(0, 8))
         self._app_var     = tk.StringVar(value=list(APP_CONFIGS.keys())[0])
         self._app_buttons = {}
         for app_name in APP_CONFIGS:
@@ -1338,7 +1339,7 @@ class App(tk.Tk):
             btn.pack(side="left", padx=(0, 4))
             self._app_buttons[app_name] = btn
         self._lang_preview = tk.Label(left, text="", font=("Microsoft JhengHei UI", 10),
-                                      fg="#7c6ef5", bg=BG,
+                                      fg="#cba6f7", bg=BG,
                                       wraplength=370, justify="left")
         self._lang_preview.pack(anchor="w", pady=(0, 8))
         self._select_app(list(APP_CONFIGS.keys())[0], init=True)
@@ -1347,8 +1348,8 @@ class App(tk.Tk):
         mode_hdr = tk.Frame(left, bg=BG)
         mode_hdr.pack(fill="x", pady=(0, 10))
         tk.Label(mode_hdr, text="選擇模式：", font=("Microsoft JhengHei UI", 11, "bold"),
-                 fg="#aaaaaa", bg=BG).pack(side="left", padx=(0, 8))
-        mode_btns = tk.Frame(mode_hdr, bg="#252040")
+                 fg="#a6adc8", bg=BG).pack(side="left", padx=(0, 8))
+        mode_btns = tk.Frame(mode_hdr, bg="#313244")
         mode_btns.pack(side="left")
         self._mode_var     = tk.StringVar(value="excel")
         self._mode_buttons = {}
@@ -1378,20 +1379,20 @@ class App(tk.Tk):
         self._excel_row = self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
         self._out_row   = self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
         # Ignore row with clear button
-        self._ignore_lbl = tk.Label(fp, text="🚫 Ignore Excel:", font=("Microsoft JhengHei UI", 11), fg="#dddddd",
+        self._ignore_lbl = tk.Label(fp, text="🚫 Ignore Excel:", font=("Microsoft JhengHei UI", 11), fg="#cdd6f4",
                  bg=BG, anchor="w")
         self._ignore_lbl.grid(row=3, column=0, sticky="w", pady=4)
-        self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Microsoft JhengHei UI", 9), fg="#888888",
+        self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Microsoft JhengHei UI", 9), fg="#a6adc8",
                  bg=BG, anchor="w", width=22)
         self._ignore_val.grid(row=3, column=1, sticky="w", padx=(4, 0))
         ig_btns = tk.Frame(fp, bg=BG)
         ig_btns.grid(row=3, column=2, padx=(4, 0))
         tk.Button(ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
-                  bg="#302b63", fg="white", activebackground="#443d7a",
+                  bg="#45475a", fg="white", activebackground="#3d59a1",
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._pick_ignore).pack(side="left", padx=(0, 3))
         tk.Button(ig_btns, text="清除", font=("Microsoft JhengHei UI", 10),
-                  bg="#4a1030", fg="#ffaaaa", activebackground="#6a1040",
+                  bg="#2d2030", fg="#f38ba8", activebackground="#3a2535",
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._clear_ignore).pack(side="left")
 
@@ -1421,66 +1422,66 @@ class App(tk.Tk):
         run_row.pack(fill="x")
         self._run_btn = tk.Button(run_row, text="▶  Run",
                                   font=("Microsoft JhengHei UI", 14, "bold"),
-                                  bg="#7c6ef5", fg="white",
-                                  activebackground="#6a5ce0",
+                                  bg="#cba6f7", fg="white",
+                                  activebackground="#b4befe",
                                   activeforeground="white", relief="flat",
                                   padx=20, pady=8, cursor="hand2",
                                   command=self._run)
         self._run_btn.pack(side="left", padx=(0, 8))
         self._scan_run_btn = tk.Button(run_row, text="▶  開始掃描",
                                        font=("Microsoft JhengHei UI", 14, "bold"),
-                                       bg="#e65100", fg="white",
-                                       activebackground="#bf360c",
+                                       bg="#89b4fa", fg="white",
+                                       activebackground="#74a8e6",
                                        activeforeground="white", relief="flat",
                                        padx=20, pady=8, cursor="hand2",
                                        command=self._run_scan)
         self._convert_run_btn = tk.Button(run_row, text="▶  轉換",
                                           font=("Microsoft JhengHei UI", 14, "bold"),
-                                          bg="#2e7d32", fg="white",
-                                          activebackground="#1b5e20",
+                                          bg="#cba6f7", fg="white",
+                                          activebackground="#b4befe",
                                           activeforeground="white", relief="flat",
                                           padx=20, pady=8, cursor="hand2",
                                           command=self._run_convert)
         self._cancel_btn = tk.Button(run_row, text="■  取消",
                                      font=("Microsoft JhengHei UI", 14, "bold"),
-                                     bg="#c0392b", fg="white",
-                                     activebackground="#a93226",
+                                     bg="#f38ba8", fg="white",
+                                     activebackground="#d6607c",
                                      activeforeground="white", relief="flat",
                                      padx=20, pady=8, cursor="hand2",
                                      command=self._cancel_run)
         # Don't pack scan_run_btn, convert_run_btn, or cancel_btn here — _set_mode / _finish_run controls visibility
 
         # ── RIGHT COLUMN ──────────────────────────────────────────────────────
-        right = tk.Frame(body, bg="#16132b")
+        right = tk.Frame(body, bg="#27273a")
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 12), pady=12)
 
         # ── Excel panel (right) ───────────────────────────────────────────────
-        self._excel_panel = tk.Frame(right, bg="#16132b")
+        self._excel_panel = tk.Frame(right, bg="#27273a")
         self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
 
         tk.Label(self._excel_panel, text="🔍  快速查詢",
-                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
         tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行",
-                 font=("Microsoft JhengHei UI", 10), fg="#444466", bg="#16132b").pack(anchor="w", pady=(0, 4))
-        self._ql_text = tk.Text(self._excel_panel, height=5, bg="#252040", fg="#ffffff",
+                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(0, 4))
+        self._ql_text = tk.Text(self._excel_panel, height=5, bg="#313244", fg="#ffffff",
                                 font=("Microsoft JhengHei UI", 12), relief="flat",
                                 insertbackground="white", padx=8, pady=6)
         self._ql_text.pack(fill="x", pady=(0, 6))
         self._ql_text.bind("<Control-Return>", lambda e: self._quick_lookup())
         self._ql_btn = tk.Button(self._excel_panel, text="🔍  快速查詢",
                                  font=("Microsoft JhengHei UI", 12, "bold"),
-                                 bg="#252040", fg="#aaaaaa",
-                                 activebackground="#302b63",
+                                 bg="#313244", fg="#a6adc8",
+                                 activebackground="#45475a",
                                  activeforeground="white", relief="flat",
                                  padx=14, pady=7, cursor="hand2",
                                  command=self._quick_lookup)
         self._ql_btn.pack(anchor="w")
 
         tk.Label(self._excel_panel, text="查詢結果", font=("Microsoft JhengHei UI", 10, "bold"),
-                 fg="#555577", bg="#16132b").pack(anchor="w", pady=(8, 2))
-        ql_result_f = tk.Frame(self._excel_panel, bg="#16132b")
+                 fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(8, 2))
+        ql_result_f = tk.Frame(self._excel_panel, bg="#27273a")
         ql_result_f.pack(fill="both", expand=True)
-        self._ql_result_box = tk.Text(ql_result_f, height=8, bg="#0f0c29", fg="#cccccc",
+        self._ql_result_box = tk.Text(ql_result_f, height=8, bg="#11111b", fg="#cdd6f4",
                                       font=("Courier", 11), relief="flat",
                                       state="disabled", wrap="word")
         ql_sb = ttk.Scrollbar(ql_result_f, command=self._ql_result_box.yview)
@@ -1489,17 +1490,17 @@ class App(tk.Tk):
         ql_sb.pack(side="right", fill="y")
         self._ql_result_box.tag_config("ok",   foreground="#4caf50")
         self._ql_result_box.tag_config("err",  foreground="#f44336")
-        self._ql_result_box.tag_config("info", foreground="#aaaaaa")
-        self._ql_result_box.tag_config("ql",   foreground="#7c6ef5")
+        self._ql_result_box.tag_config("info", foreground="#a6adc8")
+        self._ql_result_box.tag_config("ql",   foreground="#cba6f7")
 
         # ── Scan panel (right) ────────────────────────────────────────────────
-        self._scan_panel = tk.Frame(right, bg="#16132b")
+        self._scan_panel = tk.Frame(right, bg="#27273a")
         # shown/hidden by _set_mode
 
         # ── Convert panel (right) ─────────────────────────────────────────────
-        self._convert_panel = tk.Frame(right, bg="#16132b")
+        self._convert_panel = tk.Frame(right, bg="#27273a")
         tk.Label(self._convert_panel, text="📋  轉換掃描報告為 Ignore Excel",
-                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
         tk.Label(self._convert_panel,
                  text=(
                      "將語言掃描報告（含 「<語言> Extracted」Sheet）\n"
@@ -1512,15 +1513,15 @@ class App(tk.Tk):
                      "  • 多個 Key 同格（換行分隔）自動拆分\n"
                      "  • 同一 Key 多語言皆 Pass → 合併為同一列"
                  ),
-                 font=("Microsoft JhengHei UI", 10), fg="#555577", bg="#16132b",
+                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
                  justify="left").pack(anchor="w", pady=(6, 0))
 
         tk.Label(self._scan_panel, text="選擇要掃描的語言：",
-                 font=("Microsoft JhengHei UI", 10, "bold"), fg="#aaaaaa", bg="#16132b"
+                 font=("Microsoft JhengHei UI", 10, "bold"), fg="#a6adc8", bg="#27273a"
                  ).pack(anchor="w", pady=(0, 6))
 
         self._scan_lang_vars: dict[str, tk.BooleanVar] = {}
-        cb_frame = tk.Frame(self._scan_panel, bg="#16132b")
+        cb_frame = tk.Frame(self._scan_panel, bg="#27273a")
         cb_frame.pack(fill="x", pady=(0, 4))
 
         app  = self._app_var.get()
@@ -1531,26 +1532,26 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=False)
             self._scan_lang_vars[lang] = var
             tk.Checkbutton(cb_frame, text=code, variable=var,
-                           font=("Microsoft JhengHei UI", 9), fg="#dddddd", bg="#16132b",
-                           activebackground="#16132b", activeforeground="#7c6ef5",
-                           selectcolor="#302b63", relief="flat", cursor="hand2"
+                           font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
+                           activebackground="#27273a", activeforeground="#cba6f7",
+                           selectcolor="#45475a", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
                                   padx=6, pady=2, sticky="w")
 
-        sel_row = tk.Frame(self._scan_panel, bg="#16132b")
+        sel_row = tk.Frame(self._scan_panel, bg="#27273a")
         sel_row.pack(anchor="w", pady=(4, 8))
         tk.Button(sel_row, text="全選", font=("Microsoft JhengHei UI", 10),
-                  bg="#302b63", fg="white", relief="flat", padx=8, pady=2,
+                  bg="#45475a", fg="white", relief="flat", padx=8, pady=2,
                   cursor="hand2",
                   command=lambda: [v.set(True) for v in self._scan_lang_vars.values()]
                   ).pack(side="left", padx=(0, 6))
         tk.Button(sel_row, text="全不選", font=("Microsoft JhengHei UI", 10),
-                  bg="#302b63", fg="white", relief="flat", padx=8, pady=2,
+                  bg="#45475a", fg="white", relief="flat", padx=8, pady=2,
                   cursor="hand2",
                   command=lambda: [v.set(False) for v in self._scan_lang_vars.values()]
                   ).pack(side="left")
 
-        scan_out_f = tk.Frame(self._scan_panel, bg="#16132b")
+        scan_out_f = tk.Frame(self._scan_panel, bg="#27273a")
         scan_out_f.pack(fill="x", pady=(0, 6), padx=(0, 12))
         self._scan_out_var = tk.StringVar(value="尚未選取")
         self._scan_out_row = self._make_file_row(scan_out_f, "💾 輸出報告:",
@@ -1562,15 +1563,21 @@ class App(tk.Tk):
         bot = tk.Frame(self._inner, bg=BG)
         bot.pack(fill="both", expand=True, padx=16, pady=(0, 12))
 
-        self._progress = ttk.Progressbar(bot, mode="indeterminate")
+        _pb_style = ttk.Style()
+        _pb_style.theme_use("clam")
+        _pb_style.configure("Mocha.Horizontal.TProgressbar",
+                            troughcolor="#27273a", background="#a6e3a1",
+                            bordercolor="#45475a", lightcolor="#a6e3a1", darkcolor="#a6e3a1")
+        self._progress = ttk.Progressbar(bot, mode="indeterminate",
+                                         style="Mocha.Horizontal.TProgressbar")
         self._progress.pack(fill="x", pady=(0, 2))
         self._progress_label = tk.Label(bot, text="", font=("Microsoft JhengHei UI", 10),
-                                        fg="#7c6ef5", bg=BG)
+                                        fg="#cba6f7", bg=BG)
         self._progress_label.pack(anchor="w", pady=(0, 4))
 
         log_f = tk.Frame(bot, bg=BG)
         log_f.pack(fill="both", expand=True)
-        self._log_box = tk.Text(log_f, height=1, bg="#0f0c29", fg="#cccccc",
+        self._log_box = tk.Text(log_f, height=1, bg="#11111b", fg="#cdd6f4",
                                 font=("Courier", 11), relief="flat",
                                 state="disabled", wrap="word",
                                 insertbackground="white")
@@ -1580,8 +1587,8 @@ class App(tk.Tk):
         sb.pack(side="right", fill="y")
         self._log_box.tag_config("ok",   foreground="#4caf50")
         self._log_box.tag_config("err",  foreground="#f44336")
-        self._log_box.tag_config("info", foreground="#aaaaaa")
-        self._log_box.tag_config("ql",   foreground="#7c6ef5")
+        self._log_box.tag_config("info", foreground="#a6adc8")
+        self._log_box.tag_config("ql",   foreground="#cba6f7")
 
     @staticmethod
     def _fmt_name(name: str, n: int = 32) -> str:
@@ -1595,9 +1602,9 @@ class App(tk.Tk):
                 return
             tip = tk.Toplevel(self)
             tip.wm_overrideredirect(True)
-            tip.configure(bg="#2a2550")
-            tk.Label(tip, text=path, font=("Microsoft JhengHei UI", 9), fg="#cccccc",
-                     bg="#2a2550", padx=10, pady=5).pack()
+            tip.configure(bg="#27273a")
+            tk.Label(tip, text=path, font=("Microsoft JhengHei UI", 9), fg="#cdd6f4",
+                     bg="#27273a", padx=10, pady=5).pack()
             tip.update_idletasks()
             x = widget.winfo_rootx()
             y = widget.winfo_rooty() + widget.winfo_height() + 2
@@ -1627,14 +1634,14 @@ class App(tk.Tk):
 
     def _make_file_row(self, parent, label, var, cmd, row, is_save=False):
         parent.columnconfigure(1, weight=1)   # filename column stretches; button always visible
-        lbl = tk.Label(parent, text=label, font=("Microsoft JhengHei UI", 11), fg="#dddddd",
+        lbl = tk.Label(parent, text=label, font=("Microsoft JhengHei UI", 11), fg="#cdd6f4",
                        bg=parent["bg"], width=14, anchor="w")
         lbl.grid(row=row, column=0, sticky="w", pady=4)
-        val = tk.Label(parent, textvariable=var, font=("Microsoft JhengHei UI", 9), fg="#888888",
+        val = tk.Label(parent, textvariable=var, font=("Microsoft JhengHei UI", 9), fg="#a6adc8",
                        bg=parent["bg"], anchor="w")
         val.grid(row=row, column=1, sticky="ew", padx=(4, 0))
         btn = tk.Button(parent, text="選取", font=("Microsoft JhengHei UI", 10),
-                        bg="#302b63", fg="white", activebackground="#443d7a",
+                        bg="#45475a", fg="white", activebackground="#3d59a1",
                         activeforeground="white", relief="flat", padx=8, pady=2,
                         cursor="hand2", command=cmd)
         btn.grid(row=row, column=2, padx=(4, 0))
@@ -1643,13 +1650,13 @@ class App(tk.Tk):
     def _set_file_row_state(self, widgets, enabled: bool):
         lbl, val, btn = widgets
         if enabled:
-            lbl.configure(fg="#dddddd")
-            val.configure(fg="#888888")
-            btn.configure(state="normal", bg="#302b63", fg="white", cursor="hand2")
+            lbl.configure(fg="#cdd6f4")
+            val.configure(fg="#a6adc8")
+            btn.configure(state="normal", bg="#45475a", fg="white", cursor="hand2")
         else:
-            lbl.configure(fg="#444455")
-            val.configure(fg="#333344")
-            btn.configure(state="disabled", bg="#222035", fg="#444455", cursor="")
+            lbl.configure(fg="#6c7086")
+            val.configure(fg="#45475a")
+            btn.configure(state="disabled", bg="#1e1e2e", fg="#6c7086", cursor="")
 
     # ── App selector ─────────────────────────────────────────────────────────
 
@@ -1661,11 +1668,11 @@ class App(tk.Tk):
         self._app_var.set(app_name)
         for name, btn in self._app_buttons.items():
             if name == app_name:
-                btn.configure(bg="#7c6ef5", fg="#ffffff",
-                              activebackground="#6a5ce0", activeforeground="#ffffff")
+                btn.configure(bg="#cba6f7", fg="#cdd6f4",
+                              activebackground="#b4befe", activeforeground="#cdd6f4")
             else:
-                btn.configure(bg="#252040", fg="#888888",
-                              activebackground="#302b63", activeforeground="#ffffff")
+                btn.configure(bg="#313244", fg="#a6adc8",
+                              activebackground="#45475a", activeforeground="#ffffff")
         cfg = APP_CONFIGS.get(app_name)
         self._lang_preview.configure(
             text="  ".join(cfg.keys()) if cfg else "（全部語言）"
@@ -1726,9 +1733,9 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=lang in saved_langs)
             self._scan_lang_vars[lang] = var
             tk.Checkbutton(cb_frame, text=code, variable=var,
-                           font=("Microsoft JhengHei UI", 9), fg="#dddddd", bg="#16132b",
-                           activebackground="#16132b", activeforeground="#7c6ef5",
-                           selectcolor="#302b63", relief="flat", cursor="hand2"
+                           font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
+                           activebackground="#27273a", activeforeground="#cba6f7",
+                           selectcolor="#45475a", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
                                   padx=6, pady=2, sticky="w")
 
@@ -1738,11 +1745,11 @@ class App(tk.Tk):
         self._mode_var.set(mode)
         for val, btn in self._mode_buttons.items():
             if val == mode:
-                btn.configure(bg="#7c6ef5", fg="#ffffff",
-                              activebackground="#6a5ce0", activeforeground="#ffffff")
+                btn.configure(bg="#cba6f7", fg="#cdd6f4",
+                              activebackground="#b4befe", activeforeground="#cdd6f4")
             else:
-                btn.configure(bg="#252040", fg="#666666",
-                              activebackground="#302b63", activeforeground="#ffffff")
+                btn.configure(bg="#313244", fg="#6c7086",
+                              activebackground="#45475a", activeforeground="#ffffff")
 
         # Switch run button (guard for init before buttons are created)
         if hasattr(self, '_run_btn') and hasattr(self, '_scan_run_btn'):
@@ -1867,15 +1874,15 @@ class App(tk.Tk):
         result = {"action": None}
         dlg = tk.Toplevel(self)
         dlg.title("檔案已存在")
-        dlg.configure(bg="#1e1b35")
+        dlg.configure(bg="#1e1e2e")
         dlg.resizable(False, False)
         dlg.grab_set()
 
         tk.Label(dlg, text=f"「{existing.name}」已存在，請選擇：",
-                 font=("Microsoft JhengHei UI", 11), fg="#dddddd", bg="#1e1b35",
+                 font=("Microsoft JhengHei UI", 11), fg="#cdd6f4", bg="#1e1e2e",
                  padx=20, pady=16).pack()
 
-        btn_f = tk.Frame(dlg, bg="#1e1b35")
+        btn_f = tk.Frame(dlg, bg="#1e1e2e")
         btn_f.pack(padx=20, pady=(0, 16))
 
         def _choose(action):
@@ -1883,10 +1890,10 @@ class App(tk.Tk):
             dlg.destroy()
 
         for text, action, bg, fg in [
-            ("取代",       "overwrite", "#7c6ef5", "white"),
-            ("自動加序號", "number",    "#302b63", "white"),
-            ("取新名稱",   "rename",    "#302b63", "white"),
-            ("取消",       "cancel",    "#4a1030", "#ffaaaa"),
+            ("取代",       "overwrite", "#cba6f7", "white"),
+            ("自動加序號", "number",    "#45475a", "white"),
+            ("取新名稱",   "rename",    "#45475a", "white"),
+            ("取消",       "cancel",    "#2d2030", "#f38ba8"),
         ]:
             tk.Button(btn_f, text=text, font=("Microsoft JhengHei UI", 11, "bold"),
                       bg=bg, fg=fg, relief="flat", padx=14, pady=6,
@@ -2277,18 +2284,18 @@ class App(tk.Tk):
     def _show_changelog(self):
         win = tk.Toplevel(self)
         win.title("更新記錄")
-        win.configure(bg="#1e1b35")
+        win.configure(bg="#1e1e2e")
         win.resizable(False, False)
         win.grab_set()
 
         tk.Label(win, text="更新記錄", font=("Microsoft JhengHei UI", 13, "bold"),
-                 fg="#ffffff", bg="#1e1b35").pack(pady=(16, 6))
+                 fg="#ffffff", bg="#1e1e2e").pack(pady=(16, 6))
 
-        frame = tk.Frame(win, bg="#1e1b35")
+        frame = tk.Frame(win, bg="#1e1e2e")
         frame.pack(fill="both", expand=True, padx=16, pady=(0, 16))
 
         txt = tk.Text(frame, width=58, height=28,
-                      bg="#0f0c29", fg="#cccccc",
+                      bg="#11111b", fg="#cdd6f4",
                       font=("Microsoft JhengHei UI", 10), relief="flat",
                       wrap="word", state="normal",
                       padx=12, pady=10)
@@ -2310,14 +2317,14 @@ class App(tk.Tk):
             else:
                 txt.insert("end", line)
 
-        txt.tag_config("ver",     foreground="#7c6ef5", font=("Microsoft JhengHei UI", 11, "bold"))
-        txt.tag_config("sep",     foreground="#333355")
-        txt.tag_config("section", foreground="#aaaaaa", font=("Microsoft JhengHei UI", 10, "bold"))
-        txt.tag_config("item",    foreground="#cccccc")
+        txt.tag_config("ver",     foreground="#cba6f7", font=("Microsoft JhengHei UI", 11, "bold"))
+        txt.tag_config("sep",     foreground="#45475a")
+        txt.tag_config("section", foreground="#a6adc8", font=("Microsoft JhengHei UI", 10, "bold"))
+        txt.tag_config("item",    foreground="#cdd6f4")
         txt.configure(state="disabled")
 
         tk.Button(win, text="關閉", font=("Microsoft JhengHei UI", 10),
-                  bg="#302b63", fg="white", relief="flat",
+                  bg="#45475a", fg="white", relief="flat",
                   padx=20, pady=4, cursor="hand2",
                   command=win.destroy).pack(pady=(0, 14))
 
