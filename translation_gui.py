@@ -30,6 +30,9 @@ v1.7
   • 轉換 Ignore 語言 Sheet 偵測改用 Sheet 名稱大寫字母比對
     → FIL Extracted、FIL_Extraction 等命名變體皆可正常執行
 
+UI
+  • 全介面字型改為 Microsoft JhengHei UI（微軟正黑體 UI），中英文顯示更一致
+
 ────────────────────────────────────────
 v1.6
 ────────────────────────────────────────
@@ -250,9 +253,9 @@ YELLOW  = PatternFill("solid", fgColor="FFD700")
 YELLOW2 = PatternFill("solid", fgColor="FFF176")   # 2nd longest when ARA is longest
 RED     = PatternFill("solid", fgColor="FF6B6B")
 HEADER = PatternFill("solid", fgColor="302B63")
-H_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=10)
-D_FONT = Font(name="Arial", size=10)
-B_FONT = Font(name="Arial", size=10, bold=True)
+H_FONT = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
+D_FONT = Font(name="Microsoft JhengHei UI", size=10)
+B_FONT = Font(name="Microsoft JhengHei UI", size=10, bold=True)
 CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 LEFT   = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 thin   = Side(style="thin", color="DDDDDD")
@@ -623,11 +626,11 @@ def convert_scan_to_ignore(input_xlsx: Path, output_xlsx: Path, log) -> int:
     ws.title = "Ignore Table"
 
     hdr_fill  = PatternFill("solid", fgColor="4472C4")
-    hdr_font  = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    hdr_font  = Font(name="Microsoft JhengHei UI", bold=True, color="FFFFFF", size=11)
     thin_s    = Side(style="thin", color="BFBFBF")
     cell_bdr  = Border(left=thin_s, right=thin_s, top=thin_s, bottom=thin_s)
     alt_fill  = PatternFill("solid", fgColor="EEF2FA")
-    data_font = Font(name="Arial", size=10)
+    data_font = Font(name="Microsoft JhengHei UI", size=10)
 
     for c, h in enumerate(["Module", "ENU翻譯檔字串", "問題Key", "語言"], 1):
         cell = ws.cell(row=1, column=c, value=h)
@@ -737,7 +740,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
         c = rpt.cell(row=1, column=ci, value=h)
         c.fill = RPT_H_FILL
-        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+        c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
         c.alignment, c.border = CENTER, BORDER
     rpt.row_dimensions[1].height = 24
 
@@ -759,13 +762,13 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
             c.border = row_border
             if ci == 5:
                 c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
-                c.font = Font(name="Arial", size=10, bold=True)
+                c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
                 c.alignment = LEFT
             elif ci == 3:
-                c.font = Font(name="Arial", size=10)
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             else:
-                c.font = Font(name="Arial", size=10)
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = LEFT
 
     rpt.column_dimensions["A"].width = 40   # Module
@@ -922,10 +925,10 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         return f"{code}\n{name}" if name else code
 
     MODULE_FILL   = PatternFill("solid", fgColor="FFFFFF")
-    MODULE_FONT   = Font(name="Arial", size=9, color="302B63")
+    MODULE_FONT   = Font(name="Microsoft JhengHei UI", size=9, color="302B63")
     NF_FILL       = PatternFill("solid", fgColor="FFF3CD")
-    NF_FONT       = Font(name="Arial", size=9, color="cc4400", bold=True)
-    DIM_FONT      = Font(name="Arial", size=10, color="aaaaaa")
+    NF_FONT       = Font(name="Microsoft JhengHei UI", size=9, color="cc4400", bold=True)
+    DIM_FONT      = Font(name="Microsoft JhengHei UI", size=10, color="aaaaaa")
     GROUP_TOP     = Border(left=thin, right=thin,
                            top=Side(style="medium", color="302B63"),
                            bottom=Side(style="thin", color="DDDDDD"))
@@ -976,7 +979,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         # Col 3: EN Base — dim on repeated rows
         c = ws.cell(row=ri, column=3, value=_xl_safe(en_val) if is_first else None)
         if rd.get("fuzzy") and is_first:
-            c.font = Font(name="Arial", size=10, bold=True, color="E65100")
+            c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E65100")
             from openpyxl.comments import Comment
             fuzzy_key = rd["fuzzy_key"]
             note  = f"⚠️ 模糊比對（變數/換行符號已正規化）\n翻譯檔實際字串:\n{fuzzy_key}"
@@ -991,7 +994,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         # Col 4: Key name (one key per row, no symbols)
         c = ws.cell(row=ri, column=4, value=_xl_safe(key_name) or None)
         c.fill   = KEY_COL_FILL
-        c.font = Font(name="Arial", size=10)
+        c.font = Font(name="Microsoft JhengHei UI", size=10)
         c.alignment = LEFT
         c.border = border
 
@@ -1045,7 +1048,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
         c = rpt.cell(row=1, column=ci, value=h)
         c.fill = RPT_H_FILL
-        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+        c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
         c.alignment, c.border = CENTER, BORDER
     rpt.row_dimensions[1].height = 24
 
@@ -1110,15 +1113,15 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             if ci == 5:
                 color = ISSUE_COLORS.get(issue, "FFFFFF")
                 c.fill = PatternFill("solid", fgColor=color)
-                c.font = Font(name="Arial", size=10, bold=True)
+                c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
                 c.alignment = LEFT
             elif ci == 3:   # Keys column
-                c.font = Font(name="Arial", size=10)
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             else:
-                c.font = Font(name="Arial", size=10)
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = LEFT
-                c.font = Font(name="Arial", size=10)
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
 
     rpt.column_dimensions["A"].width = 40   # Module
     rpt.column_dimensions["B"].width = 44
@@ -1146,8 +1149,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         ca = ls.cell(row=ri, column=1, value=a)
         cb = ls.cell(row=ri, column=2, value=b)
         bold = ri in (1, 7, 12)
-        ca.font = Font(name="Arial", size=10, bold=bold)
-        cb.font = Font(name="Arial", size=10, bold=bold)
+        ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
+        cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         if ri == 2:  ca.fill = YELLOW
         if ri == 3:  ca.fill = RED
         if ri == 8:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
@@ -1294,15 +1297,15 @@ class App(tk.Tk):
         title_f = tk.Frame(hdr, bg="#0f0c29")
         title_f.pack(pady=(14, 2))
         tk.Label(title_f, text="MUI Translation Tool",
-                 font=("Arial", 16, "bold"), fg="#ffffff", bg="#0f0c29").pack(side="left")
+                 font=("Microsoft JhengHei UI", 16, "bold"), fg="#ffffff", bg="#0f0c29").pack(side="left")
         tk.Label(title_f, text=f" {APP_VERSION}",
-                 font=("Arial", 11, "bold"), fg="#7c6ef5", bg="#0f0c29").pack(side="left", pady=(4,0))
+                 font=("Microsoft JhengHei UI", 11, "bold"), fg="#7c6ef5", bg="#0f0c29").pack(side="left", pady=(4,0))
         sub_f = tk.Frame(hdr, bg="#0f0c29")
         sub_f.pack(pady=(0, 10))
         tk.Label(sub_f, text=f"by {APP_AUTHOR}",
-                 font=("Arial", 10), fg="#444466", bg="#0f0c29").pack(side="left")
+                 font=("Microsoft JhengHei UI", 10), fg="#444466", bg="#0f0c29").pack(side="left")
         tk.Button(sub_f, text="📋 更新記錄",
-                  font=("Arial", 9), fg="#7c6ef5", bg="#0f0c29",
+                  font=("Microsoft JhengHei UI", 9), fg="#7c6ef5", bg="#0f0c29",
                   activeforeground="#aaaaff", activebackground="#0f0c29",
                   relief="flat", cursor="hand2", bd=0,
                   command=self._show_changelog).pack(side="left", padx=(12, 0))
@@ -1321,7 +1324,7 @@ class App(tk.Tk):
         # App selector
         app_hdr = tk.Frame(left, bg=BG)
         app_hdr.pack(fill="x", pady=(0, 3))
-        tk.Label(app_hdr, text="選擇 App：", font=("Arial", 11, "bold"),
+        tk.Label(app_hdr, text="選擇 App：", font=("Microsoft JhengHei UI", 11, "bold"),
                  fg="#aaaaaa", bg=BG).pack(side="left", padx=(0, 8))
         self._app_var     = tk.StringVar(value=list(APP_CONFIGS.keys())[0])
         self._app_buttons = {}
@@ -1329,12 +1332,12 @@ class App(tk.Tk):
             langs = APP_CONFIGS[app_name]
             count = len(langs) if langs else "全部"
             btn = tk.Button(app_hdr, text=f"{app_name}({count})",
-                            font=("Arial", 10, "bold"), relief="flat",
+                            font=("Microsoft JhengHei UI", 10, "bold"), relief="flat",
                             cursor="hand2", padx=7, pady=4, bd=0,
                             command=lambda n=app_name: self._select_app(n))
             btn.pack(side="left", padx=(0, 4))
             self._app_buttons[app_name] = btn
-        self._lang_preview = tk.Label(left, text="", font=("Arial", 10),
+        self._lang_preview = tk.Label(left, text="", font=("Microsoft JhengHei UI", 10),
                                       fg="#7c6ef5", bg=BG,
                                       wraplength=370, justify="left")
         self._lang_preview.pack(anchor="w", pady=(0, 8))
@@ -1343,7 +1346,7 @@ class App(tk.Tk):
         # Mode selector
         mode_hdr = tk.Frame(left, bg=BG)
         mode_hdr.pack(fill="x", pady=(0, 10))
-        tk.Label(mode_hdr, text="選擇模式：", font=("Arial", 11, "bold"),
+        tk.Label(mode_hdr, text="選擇模式：", font=("Microsoft JhengHei UI", 11, "bold"),
                  fg="#aaaaaa", bg=BG).pack(side="left", padx=(0, 8))
         mode_btns = tk.Frame(mode_hdr, bg="#252040")
         mode_btns.pack(side="left")
@@ -1351,7 +1354,7 @@ class App(tk.Tk):
         self._mode_buttons = {}
         for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"), ("convert", "轉換 Ignore")]:
             btn = tk.Button(mode_btns, text=label,
-                            font=("Arial", 11, "bold"), relief="flat",
+                            font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
                             cursor="hand2", padx=14, pady=5, bd=0,
                             command=lambda v=val: self._set_mode(v))
             btn.pack(side="left")
@@ -1375,19 +1378,19 @@ class App(tk.Tk):
         self._excel_row = self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
         self._out_row   = self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
         # Ignore row with clear button
-        self._ignore_lbl = tk.Label(fp, text="🚫 Ignore Excel:", font=("Arial", 11), fg="#dddddd",
+        self._ignore_lbl = tk.Label(fp, text="🚫 Ignore Excel:", font=("Microsoft JhengHei UI", 11), fg="#dddddd",
                  bg=BG, anchor="w")
         self._ignore_lbl.grid(row=3, column=0, sticky="w", pady=4)
-        self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Arial", 9), fg="#888888",
+        self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Microsoft JhengHei UI", 9), fg="#888888",
                  bg=BG, anchor="w", width=22)
         self._ignore_val.grid(row=3, column=1, sticky="w", padx=(4, 0))
         ig_btns = tk.Frame(fp, bg=BG)
         ig_btns.grid(row=3, column=2, padx=(4, 0))
-        tk.Button(ig_btns, text="選取", font=("Arial", 10),
+        tk.Button(ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
                   bg="#302b63", fg="white", activebackground="#443d7a",
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._pick_ignore).pack(side="left", padx=(0, 3))
-        tk.Button(ig_btns, text="清除", font=("Arial", 10),
+        tk.Button(ig_btns, text="清除", font=("Microsoft JhengHei UI", 10),
                   bg="#4a1030", fg="#ffaaaa", activebackground="#6a1040",
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._clear_ignore).pack(side="left")
@@ -1417,7 +1420,7 @@ class App(tk.Tk):
         run_row = tk.Frame(left, bg=BG)
         run_row.pack(fill="x")
         self._run_btn = tk.Button(run_row, text="▶  Run",
-                                  font=("Arial", 14, "bold"),
+                                  font=("Microsoft JhengHei UI", 14, "bold"),
                                   bg="#7c6ef5", fg="white",
                                   activebackground="#6a5ce0",
                                   activeforeground="white", relief="flat",
@@ -1425,21 +1428,21 @@ class App(tk.Tk):
                                   command=self._run)
         self._run_btn.pack(side="left", padx=(0, 8))
         self._scan_run_btn = tk.Button(run_row, text="▶  開始掃描",
-                                       font=("Arial", 14, "bold"),
+                                       font=("Microsoft JhengHei UI", 14, "bold"),
                                        bg="#e65100", fg="white",
                                        activebackground="#bf360c",
                                        activeforeground="white", relief="flat",
                                        padx=20, pady=8, cursor="hand2",
                                        command=self._run_scan)
         self._convert_run_btn = tk.Button(run_row, text="▶  轉換",
-                                          font=("Arial", 14, "bold"),
+                                          font=("Microsoft JhengHei UI", 14, "bold"),
                                           bg="#2e7d32", fg="white",
                                           activebackground="#1b5e20",
                                           activeforeground="white", relief="flat",
                                           padx=20, pady=8, cursor="hand2",
                                           command=self._run_convert)
         self._cancel_btn = tk.Button(run_row, text="■  取消",
-                                     font=("Arial", 14, "bold"),
+                                     font=("Microsoft JhengHei UI", 14, "bold"),
                                      bg="#c0392b", fg="white",
                                      activebackground="#a93226",
                                      activeforeground="white", relief="flat",
@@ -1456,16 +1459,16 @@ class App(tk.Tk):
         self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
 
         tk.Label(self._excel_panel, text="🔍  快速查詢",
-                 font=("Arial", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
         tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行",
-                 font=("Arial", 10), fg="#444466", bg="#16132b").pack(anchor="w", pady=(0, 4))
+                 font=("Microsoft JhengHei UI", 10), fg="#444466", bg="#16132b").pack(anchor="w", pady=(0, 4))
         self._ql_text = tk.Text(self._excel_panel, height=5, bg="#252040", fg="#ffffff",
-                                font=("Arial", 12), relief="flat",
+                                font=("Microsoft JhengHei UI", 12), relief="flat",
                                 insertbackground="white", padx=8, pady=6)
         self._ql_text.pack(fill="x", pady=(0, 6))
         self._ql_text.bind("<Control-Return>", lambda e: self._quick_lookup())
         self._ql_btn = tk.Button(self._excel_panel, text="🔍  快速查詢",
-                                 font=("Arial", 12, "bold"),
+                                 font=("Microsoft JhengHei UI", 12, "bold"),
                                  bg="#252040", fg="#aaaaaa",
                                  activebackground="#302b63",
                                  activeforeground="white", relief="flat",
@@ -1473,7 +1476,7 @@ class App(tk.Tk):
                                  command=self._quick_lookup)
         self._ql_btn.pack(anchor="w")
 
-        tk.Label(self._excel_panel, text="查詢結果", font=("Arial", 10, "bold"),
+        tk.Label(self._excel_panel, text="查詢結果", font=("Microsoft JhengHei UI", 10, "bold"),
                  fg="#555577", bg="#16132b").pack(anchor="w", pady=(8, 2))
         ql_result_f = tk.Frame(self._excel_panel, bg="#16132b")
         ql_result_f.pack(fill="both", expand=True)
@@ -1496,7 +1499,7 @@ class App(tk.Tk):
         # ── Convert panel (right) ─────────────────────────────────────────────
         self._convert_panel = tk.Frame(right, bg="#16132b")
         tk.Label(self._convert_panel, text="📋  轉換掃描報告為 Ignore Excel",
-                 font=("Arial", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
         tk.Label(self._convert_panel,
                  text=(
                      "將語言掃描報告（含 「<語言> Extracted」Sheet）\n"
@@ -1509,11 +1512,11 @@ class App(tk.Tk):
                      "  • 多個 Key 同格（換行分隔）自動拆分\n"
                      "  • 同一 Key 多語言皆 Pass → 合併為同一列"
                  ),
-                 font=("Arial", 10), fg="#555577", bg="#16132b",
+                 font=("Microsoft JhengHei UI", 10), fg="#555577", bg="#16132b",
                  justify="left").pack(anchor="w", pady=(6, 0))
 
         tk.Label(self._scan_panel, text="選擇要掃描的語言：",
-                 font=("Arial", 10, "bold"), fg="#aaaaaa", bg="#16132b"
+                 font=("Microsoft JhengHei UI", 10, "bold"), fg="#aaaaaa", bg="#16132b"
                  ).pack(anchor="w", pady=(0, 6))
 
         self._scan_lang_vars: dict[str, tk.BooleanVar] = {}
@@ -1528,7 +1531,7 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=False)
             self._scan_lang_vars[lang] = var
             tk.Checkbutton(cb_frame, text=code, variable=var,
-                           font=("Arial", 9), fg="#dddddd", bg="#16132b",
+                           font=("Microsoft JhengHei UI", 9), fg="#dddddd", bg="#16132b",
                            activebackground="#16132b", activeforeground="#7c6ef5",
                            selectcolor="#302b63", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
@@ -1536,12 +1539,12 @@ class App(tk.Tk):
 
         sel_row = tk.Frame(self._scan_panel, bg="#16132b")
         sel_row.pack(anchor="w", pady=(4, 8))
-        tk.Button(sel_row, text="全選", font=("Arial", 10),
+        tk.Button(sel_row, text="全選", font=("Microsoft JhengHei UI", 10),
                   bg="#302b63", fg="white", relief="flat", padx=8, pady=2,
                   cursor="hand2",
                   command=lambda: [v.set(True) for v in self._scan_lang_vars.values()]
                   ).pack(side="left", padx=(0, 6))
-        tk.Button(sel_row, text="全不選", font=("Arial", 10),
+        tk.Button(sel_row, text="全不選", font=("Microsoft JhengHei UI", 10),
                   bg="#302b63", fg="white", relief="flat", padx=8, pady=2,
                   cursor="hand2",
                   command=lambda: [v.set(False) for v in self._scan_lang_vars.values()]
@@ -1561,7 +1564,7 @@ class App(tk.Tk):
 
         self._progress = ttk.Progressbar(bot, mode="indeterminate")
         self._progress.pack(fill="x", pady=(0, 2))
-        self._progress_label = tk.Label(bot, text="", font=("Arial", 10),
+        self._progress_label = tk.Label(bot, text="", font=("Microsoft JhengHei UI", 10),
                                         fg="#7c6ef5", bg=BG)
         self._progress_label.pack(anchor="w", pady=(0, 4))
 
@@ -1593,7 +1596,7 @@ class App(tk.Tk):
             tip = tk.Toplevel(self)
             tip.wm_overrideredirect(True)
             tip.configure(bg="#2a2550")
-            tk.Label(tip, text=path, font=("Arial", 9), fg="#cccccc",
+            tk.Label(tip, text=path, font=("Microsoft JhengHei UI", 9), fg="#cccccc",
                      bg="#2a2550", padx=10, pady=5).pack()
             tip.update_idletasks()
             x = widget.winfo_rootx()
@@ -1624,13 +1627,13 @@ class App(tk.Tk):
 
     def _make_file_row(self, parent, label, var, cmd, row, is_save=False):
         parent.columnconfigure(1, weight=1)   # filename column stretches; button always visible
-        lbl = tk.Label(parent, text=label, font=("Arial", 11), fg="#dddddd",
+        lbl = tk.Label(parent, text=label, font=("Microsoft JhengHei UI", 11), fg="#dddddd",
                        bg=parent["bg"], width=14, anchor="w")
         lbl.grid(row=row, column=0, sticky="w", pady=4)
-        val = tk.Label(parent, textvariable=var, font=("Arial", 9), fg="#888888",
+        val = tk.Label(parent, textvariable=var, font=("Microsoft JhengHei UI", 9), fg="#888888",
                        bg=parent["bg"], anchor="w")
         val.grid(row=row, column=1, sticky="ew", padx=(4, 0))
-        btn = tk.Button(parent, text="選取", font=("Arial", 10),
+        btn = tk.Button(parent, text="選取", font=("Microsoft JhengHei UI", 10),
                         bg="#302b63", fg="white", activebackground="#443d7a",
                         activeforeground="white", relief="flat", padx=8, pady=2,
                         cursor="hand2", command=cmd)
@@ -1723,7 +1726,7 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=lang in saved_langs)
             self._scan_lang_vars[lang] = var
             tk.Checkbutton(cb_frame, text=code, variable=var,
-                           font=("Arial", 9), fg="#dddddd", bg="#16132b",
+                           font=("Microsoft JhengHei UI", 9), fg="#dddddd", bg="#16132b",
                            activebackground="#16132b", activeforeground="#7c6ef5",
                            selectcolor="#302b63", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
@@ -1869,7 +1872,7 @@ class App(tk.Tk):
         dlg.grab_set()
 
         tk.Label(dlg, text=f"「{existing.name}」已存在，請選擇：",
-                 font=("Arial", 11), fg="#dddddd", bg="#1e1b35",
+                 font=("Microsoft JhengHei UI", 11), fg="#dddddd", bg="#1e1b35",
                  padx=20, pady=16).pack()
 
         btn_f = tk.Frame(dlg, bg="#1e1b35")
@@ -1885,7 +1888,7 @@ class App(tk.Tk):
             ("取新名稱",   "rename",    "#302b63", "white"),
             ("取消",       "cancel",    "#4a1030", "#ffaaaa"),
         ]:
-            tk.Button(btn_f, text=text, font=("Arial", 11, "bold"),
+            tk.Button(btn_f, text=text, font=("Microsoft JhengHei UI", 11, "bold"),
                       bg=bg, fg=fg, relief="flat", padx=14, pady=6,
                       cursor="hand2", command=lambda a=action: _choose(a)
                       ).pack(side="left", padx=4)
@@ -2278,7 +2281,7 @@ class App(tk.Tk):
         win.resizable(False, False)
         win.grab_set()
 
-        tk.Label(win, text="更新記錄", font=("Arial", 13, "bold"),
+        tk.Label(win, text="更新記錄", font=("Microsoft JhengHei UI", 13, "bold"),
                  fg="#ffffff", bg="#1e1b35").pack(pady=(16, 6))
 
         frame = tk.Frame(win, bg="#1e1b35")
@@ -2313,7 +2316,7 @@ class App(tk.Tk):
         txt.tag_config("item",    foreground="#cccccc")
         txt.configure(state="disabled")
 
-        tk.Button(win, text="關閉", font=("Arial", 10),
+        tk.Button(win, text="關閉", font=("Microsoft JhengHei UI", 10),
                   bg="#302b63", fg="white", relief="flat",
                   padx=20, pady=4, cursor="hand2",
                   command=win.destroy).pack(pady=(0, 14))
