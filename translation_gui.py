@@ -19,10 +19,16 @@ v1.7
 ────────────────────────────────────────
 新功能
   • 新增「轉換 Ignore」模式：一鍵將語言掃描報告（含 <語言> Extracted Sheet）轉換為 Ignore Excel
-    → 自動偵測 Sheet 名稱（格式：FIL Extracted / HEB Extracted / POL Extracted …）
     → Comment = Pass 的字串按 Sheet 所屬語言收錄，不混用「語言欄」的多語言值
     → 同一 Key 在多個語言都 Pass 時自動合併為同一列（語言欄逗號分隔）
     → 多個 Key 同格（換行分隔）自動拆分為獨立列
+  • 所有檔案欄位加上 Hover Tooltip，滑入顯示完整路徑，三個模式皆支援
+
+強化 / Bug 修正
+  • 輸出檔已存在時跳出四選一彈窗：取代 / 自動加序號 / 取新名稱 / 取消
+    → 三個模式（Excel 查詢、語言全掃描、轉換 Ignore）皆套用
+  • 轉換 Ignore 語言 Sheet 偵測改用 Sheet 名稱大寫字母比對
+    → FIL Extracted、FIL_Extraction 等命名變體皆可正常執行
 
 ────────────────────────────────────────
 v1.6
