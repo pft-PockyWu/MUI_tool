@@ -1810,6 +1810,31 @@ class App(tk.Tk):
             self._convert_out_path = out_path
             self._convert_out_var.set(self._fmt_name(out_path.name))
 
+        # ── 防呆：輸出檔已存在 ────────────────────────────────────────────────
+        if out_path.exists():
+            answer = messagebox.askyesnocancel(
+                "檔案已存在",
+                f"「{out_path.name}」已存在。\n\n"
+                "是  →  取代\n"
+                "否  →  自動加序號\n"
+                "取消  →  中止"
+            )
+            if answer is None:      # 取消
+                return
+            elif answer is False:   # 否 → 自動加序號
+                base = re.sub(r'_\d+$', '', out_path.stem)
+                n = 1
+                while True:
+                    candidate = out_path.parent / f"{base}_{n}{out_path.suffix}"
+                    if not candidate.exists():
+                        out_path = candidate
+                        self._convert_out_path = out_path
+                        self._convert_out_var.set(self._fmt_name(out_path.name))
+                        self._save_app_paths()
+                        break
+                    n += 1
+            # answer is True → 取代，直接繼續
+
         self._cancel_event.clear()
         self._convert_run_btn.configure(state="disabled")
         self._convert_run_btn.pack_forget()
