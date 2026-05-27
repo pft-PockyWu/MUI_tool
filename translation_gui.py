@@ -1800,6 +1800,68 @@ class App(tk.Tk):
             self._convert_out_var.set(self._fmt_name(Path(p).name))
             self._save_app_paths()
 
+    def _ask_file_exists(self, existing: Path) -> Path | None:
+        """
+        Show a 4-button dialog when output file already exists.
+        Returns: resolved Path to use, or None to abort.
+        """
+        result = {"action": None}
+        dlg = tk.Toplevel(self)
+        dlg.title("檔案已存在")
+        dlg.configure(bg="#1e1b35")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text=f"「{existing.name}」已存在，請選擇：",
+                 font=("Arial", 11), fg="#dddddd", bg="#1e1b35",
+                 padx=20, pady=16).pack()
+
+        btn_f = tk.Frame(dlg, bg="#1e1b35")
+        btn_f.pack(padx=20, pady=(0, 16))
+
+        def _choose(action):
+            result["action"] = action
+            dlg.destroy()
+
+        for text, action, bg, fg in [
+            ("取代",       "overwrite", "#7c6ef5", "white"),
+            ("自動加序號", "number",    "#302b63", "white"),
+            ("取新名稱",   "rename",    "#302b63", "white"),
+            ("取消",       "cancel",    "#4a1030", "#ffaaaa"),
+        ]:
+            tk.Button(btn_f, text=text, font=("Arial", 11, "bold"),
+                      bg=bg, fg=fg, relief="flat", padx=14, pady=6,
+                      cursor="hand2", command=lambda a=action: _choose(a)
+                      ).pack(side="left", padx=4)
+
+        dlg.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width()  - dlg.winfo_width())  // 2
+        y = self.winfo_y() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+        self.wait_window(dlg)
+
+        action = result["action"]
+        if action == "overwrite":
+            return existing
+        elif action == "number":
+            base = re.sub(r'_\d+$', '', existing.stem)
+            n = 1
+            while True:
+                candidate = existing.parent / f"{base}_{n}{existing.suffix}"
+                if not candidate.exists():
+                    return candidate
+                n += 1
+        elif action == "rename":
+            p = filedialog.asksaveasfilename(
+                title="另存為",
+                initialdir=str(existing.parent),
+                initialfile=existing.stem,
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")]
+            )
+            return Path(p) if p else None
+        return None   # cancel
+
     def _run_convert(self):
         if not self._convert_in_path:
             messagebox.showwarning("提示", "請先選取語言掃描報告"); return
@@ -1812,28 +1874,13 @@ class App(tk.Tk):
 
         # ── 防呆：輸出檔已存在 ────────────────────────────────────────────────
         if out_path.exists():
-            answer = messagebox.askyesnocancel(
-                "檔案已存在",
-                f"「{out_path.name}」已存在。\n\n"
-                "是  →  取代\n"
-                "否  →  自動加序號\n"
-                "取消  →  中止"
-            )
-            if answer is None:      # 取消
+            resolved = self._ask_file_exists(out_path)
+            if resolved is None:
                 return
-            elif answer is False:   # 否 → 自動加序號
-                base = re.sub(r'_\d+$', '', out_path.stem)
-                n = 1
-                while True:
-                    candidate = out_path.parent / f"{base}_{n}{out_path.suffix}"
-                    if not candidate.exists():
-                        out_path = candidate
-                        self._convert_out_path = out_path
-                        self._convert_out_var.set(self._fmt_name(out_path.name))
-                        self._save_app_paths()
-                        break
-                    n += 1
-            # answer is True → 取代，直接繼續
+            out_path = resolved
+            self._convert_out_path = out_path
+            self._convert_out_var.set(self._fmt_name(out_path.name))
+            self._save_app_paths()
 
         self._cancel_event.clear()
         self._convert_run_btn.configure(state="disabled")
