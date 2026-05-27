@@ -10,11 +10,36 @@ from collections import defaultdict, OrderedDict
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v1.5.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v1.7.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v1.7
+────────────────────────────────────────
+新功能
+  • 新增「轉換 Ignore」模式：一鍵將語言掃描報告（含 <語言> Extracted Sheet）轉換為 Ignore Excel
+    → 自動偵測 Sheet 名稱（格式：FIL Extracted / HEB Extracted / POL Extracted …）
+    → Comment = Pass 的字串按 Sheet 所屬語言收錄，不混用「語言欄」的多語言值
+    → 同一 Key 在多個語言都 Pass 時自動合併為同一列（語言欄逗號分隔）
+    → 多個 Key 同格（換行分隔）自動拆分為獨立列
+
+────────────────────────────────────────
+v1.6
+────────────────────────────────────────
+UI 優化
+  • 語言全掃描模式：輸入／輸出 Excel 欄位自動灰化，避免使用者混淆
+  • 語言全掃描模式：輸出報告「選取」按鈕不再被截斷（改用彈性欄寬）
+  • 移除「部分 Key 未翻譯」分類，改統一顯示為「未翻譯 / 空白」，避免使用者混淆
+
+新功能
+  • Ignore Excel 語言欄支援 ALL_LANGUAGES，表示該字串所有語言皆與英文相同，直接跳過不報錯
+
+Bug 修正
+  • 修正特定翻譯字串含 \x10 等控制字元導致輸出 Excel 時崩潰（IllegalCharacterError）
+    → 寫入前自動清除 Excel XML 不合法字元，不影響翻譯內容完整度
+
+────────────────────────────────────────
 v1.5
 ────────────────────────────────────────
 新功能
@@ -326,6 +351,14 @@ def parse_android_xml(text: str) -> dict:
 
 GARBLED_RE = re.compile(r'[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f]')
 
+# Characters illegal in Excel XML (openpyxl will raise IllegalCharacterError)
+_XL_ILLEGAL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff]')
+
+def _xl_safe(s: str) -> str:
+    """Strip characters that openpyxl cannot write to Excel cells."""
+    if not isinstance(s, str): return s
+    return _XL_ILLEGAL_RE.sub('', s)
+
 def is_garbled(val: str) -> bool:
     if not val or not val.strip(): return True
     if GARBLED_RE.search(val): return True
@@ -469,7 +502,9 @@ def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
     Parse ignore Excel with columns: Module | ENU翻譯檔字串 | 問題Key | 語言
     語言 column contains comma-separated lang codes (e.g. "HEB, POL, FIL")
     using the APP_CONFIGS keys (e.g. HEB→he, POL→pl, FIL→fil).
+    Special value "ALL_LANGUAGES" skips the string for every language.
     Returns set of (module, key_name, lang_code) to skip in reports.
+    Entries with ALL_LANGUAGES use lang_code="*" as a wildcard sentinel.
     """
     if not path or not path.exists():
         return set()
@@ -485,11 +520,15 @@ def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
 
     ignore: set = set()
     for _, row in df.iterrows():
-        module   = str(row.iloc[0]).strip() if pd_.notna(row.iloc[0]) else ""
-        key_name = str(row.iloc[2]).strip() if pd_.notna(row.iloc[2]) else ""
+        module    = str(row.iloc[0]).strip() if pd_.notna(row.iloc[0]) else ""
+        key_name  = str(row.iloc[2]).strip() if pd_.notna(row.iloc[2]) else ""
         langs_str = str(row.iloc[3]).strip() if pd_.notna(row.iloc[3]) else ""
 
         if not module or not key_name or not langs_str:
+            continue
+
+        if langs_str.upper() == "ALL_LANGUAGES":
+            ignore.add((module, key_name, "*"))
             continue
 
         for code in [c.strip() for c in langs_str.split(",")]:
@@ -498,6 +537,100 @@ def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
                 ignore.add((module, key_name, lang))
 
     return ignore
+
+
+def _in_ignore(ignore_set: set, module: str, key: str, lang: str) -> bool:
+    """Check ignore_set with wildcard support for ALL_LANGUAGES entries."""
+    return (module, key, lang) in ignore_set or (module, key, "*") in ignore_set
+
+
+# ── Scan-report → Ignore-table converter ─────────────────────────────────────
+
+def convert_scan_to_ignore(input_xlsx: Path, output_xlsx: Path, log) -> int:
+    """
+    Convert a language scan report to an ignore table Excel.
+    Detects sheets named "<LANG> Extracted"; for each Pass row assigns only
+    that sheet's own language (ignores the 語言 column which may list extras).
+    Returns number of rows written.
+    """
+    xl = pd.ExcelFile(str(input_xlsx))
+
+    lang_sheets = {}
+    for name in xl.sheet_names:
+        parts = name.strip().split()
+        if len(parts) >= 2 and parts[-1].lower() == "extracted":
+            lang_sheets[name] = parts[0].upper()
+
+    if not lang_sheets:
+        raise ValueError(
+            "找不到語言分析 Sheet。\n"
+            "請確認 Sheet 名稱格式為「<語言> Extracted」，例如：FIL Extracted"
+        )
+
+    log(f"🔍 偵測到語言 Sheet: {list(lang_sheets.values())}")
+
+    records: dict[tuple, set] = {}
+    for sheet, lang in lang_sheets.items():
+        df = pd.read_excel(xl, sheet_name=sheet)
+        if df.shape[1] < 6:
+            log(f"⚠️  '{sheet}' 欄位不足，跳過")
+            continue
+        pass_rows = df[df.iloc[:, 5].astype(str).str.strip().str.lower() == "pass"]
+        count = 0
+        for _, row in pass_rows.iterrows():
+            module   = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+            enu      = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+            keys_raw = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+            for key in keys_raw.split("\n"):
+                key = key.strip()
+                if key:
+                    records.setdefault((module, enu, key), set()).add(lang)
+                    count += 1
+        log(f"  {lang}: {len(pass_rows)} 列 Pass（{count} 個 Key）")
+
+    rows = []
+    for (module, enu, key), langs in sorted(records.items()):
+        rows.append([module, enu, key, ", ".join(sorted(langs))])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ignore Table"
+
+    hdr_fill  = PatternFill("solid", fgColor="4472C4")
+    hdr_font  = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    thin_s    = Side(style="thin", color="BFBFBF")
+    cell_bdr  = Border(left=thin_s, right=thin_s, top=thin_s, bottom=thin_s)
+    alt_fill  = PatternFill("solid", fgColor="EEF2FA")
+    data_font = Font(name="Arial", size=10)
+
+    for c, h in enumerate(["Module", "ENU翻譯檔字串", "問題Key", "語言"], 1):
+        cell = ws.cell(row=1, column=c, value=h)
+        cell.font      = hdr_font
+        cell.fill      = hdr_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border    = cell_bdr
+
+    for r, row_data in enumerate(rows, 2):
+        fill = alt_fill if r % 2 == 0 else None
+        for c, val in enumerate(row_data, 1):
+            cell = ws.cell(row=r, column=c, value=val)
+            cell.font      = data_font
+            cell.alignment = Alignment(vertical="center")
+            cell.border    = cell_bdr
+            if fill:
+                cell.fill = fill
+
+    ws.row_dimensions[1].height = 20
+    ws.column_dimensions["A"].width = 36
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 48
+    ws.column_dimensions["D"].width = 18
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:D{len(rows) + 1}"
+
+    wb.save(str(output_xlsx))
+    log(f"✅ 輸出完成: {output_xlsx.name}（共 {len(rows)} 筆）")
+    return len(rows)
 
 
 # ── Language scan report (scan mode) ─────────────────────────────────────────
@@ -545,13 +678,13 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
             elif enu_val and val.strip() == enu_val.strip():
                 # Check ignore: pass if ALL keys for this string are in ignore_set
                 if ignore_set and all(
-                    (module, k, lang) in ignore_set for k in (all_keys or [""])
+                    _in_ignore(ignore_set, module, k, lang) for k in (all_keys or [""])
                 ):
                     continue
                 issue    = "與英文翻譯檔相同"
                 keys_str = "\n".join(all_keys)
             elif missing_keys:
-                issue    = "部分 Key 未翻譯"
+                issue    = "未翻譯 / 空白"
                 keys_str = "\n".join(missing_keys)
             else:
                 continue
@@ -568,7 +701,6 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     ISSUE_COLORS = {
         "未翻譯 / 空白":    "FF6B6B",
         "與英文翻譯檔相同": "FFD740",
-        "部分 Key 未翻譯":  "FFB347",
     }
 
     wb = Workbook()
@@ -597,7 +729,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         rpt.row_dimensions[ri].height = row_h
 
         for ci, v in enumerate([module, enu_val, keys_str, ", ".join(langs_list), issue], 1):
-            c = rpt.cell(row=ri, column=ci, value=v or None)
+            c = rpt.cell(row=ri, column=ci, value=_xl_safe(v) or None)
             c.border = row_border
             if ci == 5:
                 c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
@@ -816,7 +948,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             c.alignment, c.border = LEFT, border
 
         # Col 3: EN Base — dim on repeated rows
-        c = ws.cell(row=ri, column=3, value=en_val if is_first else None)
+        c = ws.cell(row=ri, column=3, value=_xl_safe(en_val) if is_first else None)
         if rd.get("fuzzy") and is_first:
             c.font = Font(name="Arial", size=10, bold=True, color="E65100")
             from openpyxl.comments import Comment
@@ -831,7 +963,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.alignment, c.border = LEFT, border
 
         # Col 4: Key name (one key per row, no symbols)
-        c = ws.cell(row=ri, column=4, value=key_name or None)
+        c = ws.cell(row=ri, column=4, value=_xl_safe(key_name) or None)
         c.fill   = KEY_COL_FILL
         c.font = Font(name="Arial", size=10)
         c.alignment = LEFT
@@ -843,7 +975,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             is_base = (lang == "en")
             if is_base:
                 val = enu_val
-            c = ws.cell(row=ri, column=ci, value=val or None)
+            c = ws.cell(row=ri, column=ci, value=_xl_safe(val) or None)
             c.alignment, c.border = LEFT, border
             if not val or is_garbled(val):
                 c.fill, c.font = RED, D_FONT
@@ -852,7 +984,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                 or (enu_val and val.strip() == enu_val.strip())
             ):
                 module = rd.get("module", "")
-                if ignore_set and (module, key_name, lang) in ignore_set:
+                if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
                     c.font = D_FONT
                 else:
                     c.fill, c.font = RED, D_FONT
@@ -894,7 +1026,6 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     ISSUE_COLORS = {
         "未翻譯 / 空白":    "FF6B6B",
         "與英文翻譯檔相同": "FFD740",
-        "部分 Key 未翻譯":  "FFB347",
     }
     rpt_groups: dict[tuple, list] = OrderedDict()
 
@@ -915,12 +1046,12 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                 issue    = "未翻譯 / 空白"
                 keys_str = key_name
             elif enu_val and val.strip() == enu_val.strip():
-                if ignore_set and (module, key_name, lang) in ignore_set:
+                if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
                     continue   # intentional same-as-English → PASS
                 issue    = "與英文翻譯檔相同"
                 keys_str = key_name
             elif lang in key_missing_langs:
-                issue    = "部分 Key 未翻譯"
+                issue    = "未翻譯 / 空白"
                 keys_str = key_name
             else:
                 continue
@@ -1015,6 +1146,7 @@ class App(tk.Tk):
         self._zip_path = self._excel_path = self._out_path = None
         self._ignore_path = None
         self._scan_out_path = None
+        self._convert_in_path = self._convert_out_path = None
         self._cancel_event = threading.Event()
         self._ignore_var = tk.StringVar(value="未設定（可選）")
 
@@ -1093,6 +1225,9 @@ class App(tk.Tk):
             self._scan_out_path = Path(scan_out)
             self._scan_out_var.set(self._fmt_name(Path(scan_out).name))
 
+        _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
+        _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
+
         if self._zip_path or self._excel_path:
             self._log(f"📂 已載入上次 {app} 設定")
 
@@ -1114,6 +1249,10 @@ class App(tk.Tk):
             self._cfg[app]["ignore"] = str(self._ignore_path)
         if self._scan_out_path:
             self._cfg[app]["scan_out"] = str(self._scan_out_path)
+        if self._convert_in_path:
+            self._cfg[app]["convert_in"]  = str(self._convert_in_path)
+        if self._convert_out_path:
+            self._cfg[app]["convert_out"] = str(self._convert_out_path)
         if hasattr(self, '_scan_lang_vars'):
             self._cfg[app]["scan_langs"] = [l for l, v in self._scan_lang_vars.items() if v.get()]
         self._cfg["last_app"] = app
@@ -1184,7 +1323,7 @@ class App(tk.Tk):
         mode_btns.pack(side="left")
         self._mode_var     = tk.StringVar(value="excel")
         self._mode_buttons = {}
-        for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描")]:
+        for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"), ("convert", "轉換 Ignore")]:
             btn = tk.Button(mode_btns, text=label,
                             font=("Arial", 11, "bold"), relief="flat",
                             cursor="hand2", padx=14, pady=5, bd=0,
@@ -1195,16 +1334,20 @@ class App(tk.Tk):
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(0, 8))
 
-        # File pickers
-        fp = tk.Frame(left, bg=BG)
+        # File pickers container — swapped between standard and convert mode
+        fp_container = tk.Frame(left, bg=BG)
+        fp_container.pack(fill="x")
+
+        fp = tk.Frame(fp_container, bg=BG)
         fp.pack(fill="x")
+        self._std_fp = fp
         self._zip_var   = tk.StringVar(value="尚未選取")
         self._excel_var = tk.StringVar(value="尚未選取")
         self._out_var   = tk.StringVar(value="尚未選取")
         self._ignore_var = tk.StringVar(value="未設定（可選）")
         self._make_file_row(fp, "📦 翻譯 Zip 檔:",  self._zip_var,   self._pick_zip,   row=0)
-        self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
-        self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
+        self._excel_row = self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
+        self._out_row   = self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
         # Ignore row with clear button
         tk.Label(fp, text="🚫 Ignore Excel:", font=("Arial", 11), fg="#dddddd",
                  bg=BG, anchor="w").grid(row=3, column=0, sticky="w", pady=4)
@@ -1220,6 +1363,16 @@ class App(tk.Tk):
                   bg="#4a1030", fg="#ffaaaa", activebackground="#6a1040",
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._clear_ignore).pack(side="left")
+
+        # Convert mode file pickers (hidden by default)
+        self._conv_fp = tk.Frame(fp_container, bg=BG)
+        self._convert_in_var  = tk.StringVar(value="尚未選取")
+        self._convert_out_var = tk.StringVar(value="尚未選取")
+        self._conv_in_row  = self._make_file_row(
+            self._conv_fp, "📊 掃描報告:", self._convert_in_var, self._pick_convert_in, row=0)
+        self._conv_out_row = self._make_file_row(
+            self._conv_fp, "💾 Ignore 輸出:", self._convert_out_var, self._pick_convert_out,
+            row=1, is_save=True)
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(10, 8))
 
@@ -1241,6 +1394,13 @@ class App(tk.Tk):
                                        activeforeground="white", relief="flat",
                                        padx=20, pady=8, cursor="hand2",
                                        command=self._run_scan)
+        self._convert_run_btn = tk.Button(run_row, text="▶  轉換",
+                                          font=("Arial", 14, "bold"),
+                                          bg="#2e7d32", fg="white",
+                                          activebackground="#1b5e20",
+                                          activeforeground="white", relief="flat",
+                                          padx=20, pady=8, cursor="hand2",
+                                          command=self._run_convert)
         self._cancel_btn = tk.Button(run_row, text="■  取消",
                                      font=("Arial", 14, "bold"),
                                      bg="#c0392b", fg="white",
@@ -1248,7 +1408,7 @@ class App(tk.Tk):
                                      activeforeground="white", relief="flat",
                                      padx=20, pady=8, cursor="hand2",
                                      command=self._cancel_run)
-        # Don't pack scan_run_btn or cancel_btn here — _set_mode / _finish_run controls visibility
+        # Don't pack scan_run_btn, convert_run_btn, or cancel_btn here — _set_mode / _finish_run controls visibility
 
         # ── RIGHT COLUMN ──────────────────────────────────────────────────────
         right = tk.Frame(body, bg="#16132b")
@@ -1295,6 +1455,25 @@ class App(tk.Tk):
         # ── Scan panel (right) ────────────────────────────────────────────────
         self._scan_panel = tk.Frame(right, bg="#16132b")
         # shown/hidden by _set_mode
+
+        # ── Convert panel (right) ─────────────────────────────────────────────
+        self._convert_panel = tk.Frame(right, bg="#16132b")
+        tk.Label(self._convert_panel, text="📋  轉換掃描報告為 Ignore Excel",
+                 font=("Arial", 12, "bold"), fg="#aaaaaa", bg="#16132b").pack(anchor="w")
+        tk.Label(self._convert_panel,
+                 text=(
+                     "將語言掃描報告（含 「<語言> Extracted」Sheet）\n"
+                     "一鍵轉換成可直接套用的 Ignore Excel。\n\n"
+                     "運作規則：\n"
+                     "  • 自動偵測所有 「X Extracted」格式的 Sheet\n"
+                     "  • 只收錄 Comment = Pass 的列\n"
+                     "  • 每個 Sheet 只記錄該 Sheet 自己的語言\n"
+                     "    （忽略「語言」欄可能包含的多語言值）\n"
+                     "  • 多個 Key 同格（換行分隔）自動拆分\n"
+                     "  • 同一 Key 多語言皆 Pass → 合併為同一列"
+                 ),
+                 font=("Arial", 10), fg="#555577", bg="#16132b",
+                 justify="left").pack(anchor="w", pady=(6, 0))
 
         tk.Label(self._scan_panel, text="選擇要掃描的語言：",
                  font=("Arial", 10, "bold"), fg="#aaaaaa", bg="#16132b"
@@ -1368,17 +1547,30 @@ class App(tk.Tk):
         return ("…" + name[-(n - 1):]) if len(name) > n else name
 
     def _make_file_row(self, parent, label, var, cmd, row, is_save=False):
-        tk.Label(parent, text=label, font=("Arial", 11), fg="#dddddd",
-                 bg=parent["bg"], width=14, anchor="w"
-                 ).grid(row=row, column=0, sticky="w", pady=4)
-        tk.Label(parent, textvariable=var, font=("Arial", 9), fg="#888888",
-                 bg=parent["bg"], anchor="w", width=32
-                 ).grid(row=row, column=1, sticky="w", padx=(4, 0))
-        tk.Button(parent, text="選取", font=("Arial", 10),
-                  bg="#302b63", fg="white", activebackground="#443d7a",
-                  activeforeground="white", relief="flat", padx=8, pady=2,
-                  cursor="hand2", command=cmd
-                  ).grid(row=row, column=2, padx=(4, 0))
+        parent.columnconfigure(1, weight=1)   # filename column stretches; button always visible
+        lbl = tk.Label(parent, text=label, font=("Arial", 11), fg="#dddddd",
+                       bg=parent["bg"], width=14, anchor="w")
+        lbl.grid(row=row, column=0, sticky="w", pady=4)
+        val = tk.Label(parent, textvariable=var, font=("Arial", 9), fg="#888888",
+                       bg=parent["bg"], anchor="w")
+        val.grid(row=row, column=1, sticky="ew", padx=(4, 0))
+        btn = tk.Button(parent, text="選取", font=("Arial", 10),
+                        bg="#302b63", fg="white", activebackground="#443d7a",
+                        activeforeground="white", relief="flat", padx=8, pady=2,
+                        cursor="hand2", command=cmd)
+        btn.grid(row=row, column=2, padx=(4, 0))
+        return lbl, val, btn
+
+    def _set_file_row_state(self, widgets, enabled: bool):
+        lbl, val, btn = widgets
+        if enabled:
+            lbl.configure(fg="#dddddd")
+            val.configure(fg="#888888")
+            btn.configure(state="normal", bg="#302b63", fg="white", cursor="hand2")
+        else:
+            lbl.configure(fg="#444455")
+            val.configure(fg="#333344")
+            btn.configure(state="disabled", bg="#222035", fg="#444455", cursor="")
 
     # ── App selector ─────────────────────────────────────────────────────────
 
@@ -1404,11 +1596,14 @@ class App(tk.Tk):
             # Load this app's saved paths (don't clear — restore from config)
             self._zip_path = self._excel_path = self._out_path = self._ignore_path = None
             self._scan_out_path = None
+            self._convert_in_path = self._convert_out_path = None
             self._zip_var.set("尚未選取")
             self._excel_var.set("尚未選取")
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
             self._ignore_var.set("未設定（可選）")
             self._scan_out_var.set("尚未選取")
+            self._convert_in_var.set("尚未選取")
+            self._convert_out_var.set("尚未選取")
 
             app_cfg = self._cfg.get(app_name, {})
             def _try_set(path_str, var, attr):
@@ -1424,6 +1619,9 @@ class App(tk.Tk):
             if scan_out and Path(scan_out).parent.exists():
                 self._scan_out_path = Path(scan_out)
                 self._scan_out_var.set(self._fmt_name(Path(scan_out).name))
+
+            _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
+            _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
 
             self._cfg["last_app"] = app_name
             save_config(self._cfg)
@@ -1469,20 +1667,47 @@ class App(tk.Tk):
 
         # Switch run button (guard for init before buttons are created)
         if hasattr(self, '_run_btn') and hasattr(self, '_scan_run_btn'):
+            self._run_btn.pack_forget()
+            self._scan_run_btn.pack_forget()
+            if hasattr(self, '_convert_run_btn'):
+                self._convert_run_btn.pack_forget()
             if mode == "excel":
-                self._scan_run_btn.pack_forget()
                 self._run_btn.pack(side="left", padx=(0, 8))
-            else:
-                self._run_btn.pack_forget()
+            elif mode == "scan":
                 self._scan_run_btn.pack(side="left")
+            else:
+                self._convert_run_btn.pack(side="left")
+
+        # Show/hide file picker panels based on mode
+        if hasattr(self, '_std_fp') and hasattr(self, '_conv_fp'):
+            if mode == "convert":
+                self._std_fp.pack_forget()
+                self._conv_fp.pack(fill="x")
+            else:
+                self._conv_fp.pack_forget()
+                self._std_fp.pack(fill="x")
+
+        # Enable/disable 輸入 & 輸出 Excel rows based on mode
+        if hasattr(self, '_excel_row') and hasattr(self, '_out_row'):
+            excel_mode = (mode == "excel")
+            self._set_file_row_state(self._excel_row, excel_mode)
+            self._set_file_row_state(self._out_row,   excel_mode)
 
         if not init:
             if mode == "excel":
                 self._scan_panel.pack_forget()
+                if hasattr(self, '_convert_panel'):
+                    self._convert_panel.pack_forget()
                 self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
+            elif mode == "scan":
+                self._excel_panel.pack_forget()
+                if hasattr(self, '_convert_panel'):
+                    self._convert_panel.pack_forget()
+                self._scan_panel.pack(fill="both", expand=True, padx=12, pady=10)
             else:
                 self._excel_panel.pack_forget()
-                self._scan_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._scan_panel.pack_forget()
+                self._convert_panel.pack(fill="both", expand=True, padx=12, pady=10)
 
     def _clear_ignore(self):
         self._ignore_path = None
@@ -1530,6 +1755,73 @@ class App(tk.Tk):
             self._scan_out_path = Path(p)
             self._scan_out_var.set(self._fmt_name(Path(p).name))
             self._save_app_paths()
+
+    # ── Convert Ignore pickers & run ─────────────────────────────────────────
+
+    def _pick_convert_in(self):
+        p = filedialog.askopenfilename(title="選取語言掃描報告",
+                                       filetypes=[("Excel files", "*.xlsx *.xls"),
+                                                  ("All files", "*.*")])
+        if p:
+            self._convert_in_path = Path(p)
+            self._convert_in_var.set(self._fmt_name(Path(p).name))
+            if not self._convert_out_path:
+                default = Path(p).parent / (Path(p).stem + "_ignore.xlsx")
+                self._convert_out_path = default
+                self._convert_out_var.set(self._fmt_name(default.name))
+            self._save_app_paths()
+
+    def _pick_convert_out(self):
+        p = filedialog.asksaveasfilename(title="選取 Ignore Excel 輸出路徑",
+                                          defaultextension=".xlsx",
+                                          filetypes=[("Excel files", "*.xlsx")])
+        if p:
+            self._convert_out_path = Path(p)
+            self._convert_out_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
+
+    def _run_convert(self):
+        if not self._convert_in_path:
+            messagebox.showwarning("提示", "請先選取語言掃描報告"); return
+
+        out_path = self._convert_out_path
+        if not out_path:
+            out_path = self._convert_in_path.parent / (self._convert_in_path.stem + "_ignore.xlsx")
+            self._convert_out_path = out_path
+            self._convert_out_var.set(self._fmt_name(out_path.name))
+
+        self._cancel_event.clear()
+        self._convert_run_btn.configure(state="disabled")
+        self._convert_run_btn.pack_forget()
+        self._cancel_btn.pack(side="left")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(12)
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
+        self._log_box.configure(state="disabled")
+
+        in_path = self._convert_in_path
+
+        def worker():
+            try:
+                n = convert_scan_to_ignore(in_path, out_path, self._log)
+                self._log(f"\n🎉 完成！共 {n} 筆，已儲存至:\n   {out_path}")
+                if messagebox.askyesno("完成", f"Ignore Excel 已產生！\n\n{out_path}\n\n是否立即開啟？"):
+                    import os
+                    if sys.platform == "win32":
+                        os.startfile(str(out_path))
+                    else:
+                        import subprocess
+                        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(out_path)])
+            except Exception as ex:
+                import traceback
+                self._log(f"❌ 發生錯誤: {ex}", "err")
+                self._log(traceback.format_exc(), "err")
+                messagebox.showerror("錯誤", str(ex))
+            finally:
+                self.after(0, self._finish_run, self._convert_run_btn)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── Scan run ─────────────────────────────────────────────────────────────
 

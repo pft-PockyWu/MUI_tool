@@ -6,7 +6,7 @@ pip install openpyxl pandas pyinstaller
 powershell -NoProfile -Command "Get-Date -Format 'yyMMdd_HHmm'" > %TEMP%\mui_stamp.tmp
 set /p STAMP=< %TEMP%\mui_stamp.tmp
 del %TEMP%\mui_stamp.tmp 2>nul
-set FNAME=MUI_tool_1_5_%STAMP%
+set FNAME=MUI_tool_1_7_%STAMP%
 
 echo [2/2] Building executable...
 powershell -Command "(Get-Content translation_gui.py -Encoding UTF8) -replace 'BUILD_DATETIME', '%STAMP%' | Set-Content translation_gui_build.py -Encoding UTF8"
