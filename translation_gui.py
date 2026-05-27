@@ -1365,14 +1365,16 @@ class App(tk.Tk):
         self._excel_var = tk.StringVar(value="尚未選取")
         self._out_var   = tk.StringVar(value="尚未選取")
         self._ignore_var = tk.StringVar(value="未設定（可選）")
-        self._make_file_row(fp, "📦 翻譯 Zip 檔:",  self._zip_var,   self._pick_zip,   row=0)
+        self._zip_row   = self._make_file_row(fp, "📦 翻譯 Zip 檔:",  self._zip_var,   self._pick_zip,   row=0)
         self._excel_row = self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
         self._out_row   = self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
         # Ignore row with clear button
-        tk.Label(fp, text="🚫 Ignore Excel:", font=("Arial", 11), fg="#dddddd",
-                 bg=BG, anchor="w").grid(row=3, column=0, sticky="w", pady=4)
-        tk.Label(fp, textvariable=self._ignore_var, font=("Arial", 9), fg="#888888",
-                 bg=BG, anchor="w", width=22).grid(row=3, column=1, sticky="w", padx=(4, 0))
+        self._ignore_lbl = tk.Label(fp, text="🚫 Ignore Excel:", font=("Arial", 11), fg="#dddddd",
+                 bg=BG, anchor="w")
+        self._ignore_lbl.grid(row=3, column=0, sticky="w", pady=4)
+        self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Arial", 9), fg="#888888",
+                 bg=BG, anchor="w", width=22)
+        self._ignore_val.grid(row=3, column=1, sticky="w", padx=(4, 0))
         ig_btns = tk.Frame(fp, bg=BG)
         ig_btns.grid(row=3, column=2, padx=(4, 0))
         tk.Button(ig_btns, text="選取", font=("Arial", 10),
@@ -1384,6 +1386,13 @@ class App(tk.Tk):
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._clear_ignore).pack(side="left")
 
+        # Tooltips for standard file rows
+        self._bind_row_tooltip(self._zip_row,   lambda: str(self._zip_path)    if self._zip_path    else None)
+        self._bind_row_tooltip(self._excel_row, lambda: str(self._excel_path)  if self._excel_path  else None)
+        self._bind_row_tooltip(self._out_row,   lambda: str(self._out_path)    if self._out_path    else None)
+        for w in (self._ignore_lbl, self._ignore_val):
+            self._bind_tooltip(w, lambda: str(self._ignore_path) if self._ignore_path else None)
+
         # Convert mode file pickers (hidden by default)
         self._conv_fp = tk.Frame(fp_container, bg=BG)
         self._convert_in_var  = tk.StringVar(value="尚未選取")
@@ -1393,6 +1402,8 @@ class App(tk.Tk):
         self._conv_out_row = self._make_file_row(
             self._conv_fp, "💾 Ignore 輸出:", self._convert_out_var, self._pick_convert_out,
             row=1, is_save=True)
+        self._bind_row_tooltip(self._conv_in_row,  lambda: str(self._convert_in_path)  if self._convert_in_path  else None)
+        self._bind_row_tooltip(self._conv_out_row, lambda: str(self._convert_out_path) if self._convert_out_path else None)
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(10, 8))
 
@@ -1533,9 +1544,10 @@ class App(tk.Tk):
         scan_out_f = tk.Frame(self._scan_panel, bg="#16132b")
         scan_out_f.pack(fill="x", pady=(0, 6), padx=(0, 12))
         self._scan_out_var = tk.StringVar(value="尚未選取")
-        self._make_file_row(scan_out_f, "💾 輸出報告:",
+        self._scan_out_row = self._make_file_row(scan_out_f, "💾 輸出報告:",
                             self._scan_out_var, self._pick_scan_out,
                             row=0, is_save=True)
+        self._bind_row_tooltip(self._scan_out_row, lambda: str(self._scan_out_path) if self._scan_out_path else None)
 
         # ── Bottom: progress + log (full width) ───────────────────────────────
         bot = tk.Frame(self._inner, bg=BG)
@@ -1565,6 +1577,44 @@ class App(tk.Tk):
     @staticmethod
     def _fmt_name(name: str, n: int = 32) -> str:
         return ("…" + name[-(n - 1):]) if len(name) > n else name
+
+    def _bind_tooltip(self, widget, path_fn):
+        """Show full path as a floating tooltip on hover; hide on leave."""
+        def _show(e):
+            path = path_fn()
+            if not path:
+                return
+            tip = tk.Toplevel(self)
+            tip.wm_overrideredirect(True)
+            tip.configure(bg="#2a2550")
+            tk.Label(tip, text=path, font=("Arial", 9), fg="#cccccc",
+                     bg="#2a2550", padx=10, pady=5).pack()
+            tip.update_idletasks()
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height() + 2
+            sw = self.winfo_screenwidth()
+            if x + tip.winfo_reqwidth() > sw:
+                x = max(0, sw - tip.winfo_reqwidth() - 4)
+            tip.geometry(f"+{x}+{y}")
+            widget._tip = tip
+
+        def _hide(e):
+            tip = getattr(widget, "_tip", None)
+            if tip:
+                try:
+                    tip.destroy()
+                except Exception:
+                    pass
+                widget._tip = None
+
+        widget.bind("<Enter>", _show)
+        widget.bind("<Leave>", _hide)
+
+    def _bind_row_tooltip(self, row_widgets, path_fn):
+        """Bind tooltip to both the label and filename widget of a file row."""
+        lbl, val, _ = row_widgets
+        self._bind_tooltip(lbl, path_fn)
+        self._bind_tooltip(val, path_fn)
 
     def _make_file_row(self, parent, label, var, cmd, row, is_save=False):
         parent.columnconfigure(1, weight=1)   # filename column stretches; button always visible
