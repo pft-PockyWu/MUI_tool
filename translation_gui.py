@@ -2289,7 +2289,7 @@ class App(tk.Tk):
 
         txt = tk.Text(frame, width=58, height=28,
                       bg="#0f0c29", fg="#cccccc",
-                      font=("Courier", 10), relief="flat",
+                      font=("Microsoft JhengHei UI", 10), relief="flat",
                       wrap="word", state="normal",
                       padx=12, pady=10)
         sb = ttk.Scrollbar(frame, command=txt.yview)
@@ -2310,9 +2310,9 @@ class App(tk.Tk):
             else:
                 txt.insert("end", line)
 
-        txt.tag_config("ver",     foreground="#7c6ef5", font=("Courier", 11, "bold"))
+        txt.tag_config("ver",     foreground="#7c6ef5", font=("Microsoft JhengHei UI", 11, "bold"))
         txt.tag_config("sep",     foreground="#333355")
-        txt.tag_config("section", foreground="#aaaaaa", font=("Courier", 10, "bold"))
+        txt.tag_config("section", foreground="#aaaaaa", font=("Microsoft JhengHei UI", 10, "bold"))
         txt.tag_config("item",    foreground="#cccccc")
         txt.configure(state="disabled")
 
