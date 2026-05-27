@@ -1931,6 +1931,15 @@ class App(tk.Tk):
             self._scan_out_path = out_path
             self._scan_out_var.set(self._fmt_name(out_path.name))
 
+        if out_path.exists():
+            resolved = self._ask_file_exists(out_path)
+            if resolved is None:
+                return
+            out_path = resolved
+            self._scan_out_path = out_path
+            self._scan_out_var.set(self._fmt_name(out_path.name))
+            self._save_app_paths()
+
         self._cancel_event.clear()
         self._scan_run_btn.configure(state="disabled")
         self._scan_run_btn.pack_forget()
@@ -2133,6 +2142,14 @@ class App(tk.Tk):
         if not self._out_path:
             self._out_path = self._excel_path.parent / (self._excel_path.stem + "_translated.xlsx")
             self._out_var.set(self._fmt_name(self._out_path.name))
+
+        if self._out_path.exists():
+            resolved = self._ask_file_exists(self._out_path)
+            if resolved is None:
+                return
+            self._out_path = resolved
+            self._out_var.set(self._fmt_name(resolved.name))
+            self._save_app_paths()
 
         self._cancel_event.clear()
         self._run_btn.configure(state="disabled")
