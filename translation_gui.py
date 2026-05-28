@@ -25,6 +25,9 @@ v1.7
   • 所有檔案欄位加上 Hover Tooltip，滑入顯示完整路徑，三個模式皆支援
 
 強化 / Bug 修正
+  • 模糊比對新增兩種正規化規則：
+    → [[in %1$d days]] 型 placeholder 剝除 [[ ]] 外殼後再比對（app 顯示的實際值可正確命中）
+    → 裝飾用單引號 'History' → History，與 app 顯示一致
   • 輸出檔已存在時跳出四選一彈窗：取代 / 自動加序號 / 取新名稱 / 取消
     → 三個模式（Excel 查詢、語言全掃描、轉換 Ignore）皆套用
   • 轉換 Ignore 語言 Sheet 偵測改用 Sheet 名稱大寫字母比對
@@ -387,17 +390,20 @@ def _visual_len(s: str) -> int:
     return sum(1 for c in s if unicodedata.category(c) not in ('Mn', 'Mc', 'Me'))
 
 
-_RE_PRINTF  = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
-_RE_PRINTF2 = re.compile(r'%[@disfeEgGuoxXld]+')
-_RE_BRACE   = re.compile(r'\{[^}]+\}')
-_RE_NUM     = re.compile(r'(?<!\w)\d+(?!\w)')
-_RE_SPACE   = re.compile(r'\s+')
+_RE_PRINTF   = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
+_RE_PRINTF2  = re.compile(r'%[@disfeEgGuoxXld]+')
+_RE_BRACE    = re.compile(r'\{[^}]+\}')
+_RE_DBRACKET = re.compile(r'\[\[|\]\]')   # strip [[ ]] wrappers, keep inner content
+_RE_NUM      = re.compile(r'(?<!\w)\d+(?!\w)')
+_RE_SPACE    = re.compile(r'\s+')
 
 def _normalize(s: str) -> str:
     s = s.replace('\\n', ' ').replace('\n', ' ')
     s = _RE_PRINTF.sub('__X__', s)
     s = _RE_PRINTF2.sub('__X__', s)
     s = _RE_BRACE.sub('__X__', s)
+    s = _RE_DBRACKET.sub('', s)           # [[in %1$d days]] → in %1$d days
+    s = s.replace("'", "")               # 'History' → History
     s = _RE_NUM.sub('__X__', s)
     return _RE_SPACE.sub(' ', s).strip().lower()
 
