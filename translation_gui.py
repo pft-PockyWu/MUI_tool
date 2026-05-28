@@ -25,7 +25,7 @@ v1.7
   • 所有檔案欄位加上 Hover Tooltip，滑入顯示完整路徑，三個模式皆支援
 
 強化 / Bug 修正
-  • 快速查詢支援 * 萬用字元：輸入 Premium plan* 可列出所有開頭符合的字串及翻譯
+  • 快速查詢 & Excel 模式皆支援 * 萬用字元：輸入 Premium plan* 展開所有符合字串
   • 模糊比對新增兩種正規化規則：
     → [[in %1$d days]] 型 placeholder 剝除 [[ ]] 外殼後再比對（app 顯示的實際值可正確命中）
     → 裝飾用單引號 'History' → History，與 app 顯示一致
@@ -826,19 +826,32 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                    output_xlsx: Path, log, target_langs: dict | None = None,
                    ignore_set: set = None, cancel_event=None):
     import pandas as pd_
+    import fnmatch as _fnmatch
     df       = pd_.read_excel(str(input_xlsx), header=0)
     page_col = df.columns[0]
     en_col   = df.columns[1]
-    total    = len(df)
+
+    # Pre-expand wildcard rows (* glob) into individual query tuples
+    query_rows = []
+    for _, row in df.iterrows():
+        en_raw = str(row[en_col]).strip()   if pd_.notna(row[en_col])   else ""
+        pg     = str(row[page_col]).strip() if pd_.notna(row[page_col]) else ""
+        if '*' in en_raw:
+            hits = sorted(k for k in index if _fnmatch.fnmatch(k.lower(), en_raw.lower()))
+            if hits:
+                query_rows.extend((pg, m) for m in hits)
+            else:
+                query_rows.append((pg, en_raw))   # keep to show ⚠ not-found
+        else:
+            query_rows.append((pg, en_raw))
+    total = len(query_rows)
 
     rows_data = []
     seen_langs: set = set()
 
-    for i, (_, row) in enumerate(df.iterrows()):
+    for i, (page, en) in enumerate(query_rows):
         if cancel_event and cancel_event.is_set():
             log("⚠️  已取消"); return
-        en   = str(row[en_col]).strip()   if pd_.notna(row[en_col])   else ""
-        page = str(row[page_col]).strip() if pd_.notna(row[page_col]) else ""
 
         if (i + 1) % 5 == 0 or i == total - 1:
             log(f"  處理第 {i+1} / {total} 筆...")
