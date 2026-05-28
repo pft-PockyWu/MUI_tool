@@ -1495,7 +1495,7 @@ class App(tk.Tk):
 
         tk.Label(self._excel_panel, text="🔍  快速查詢",
                  font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
-        tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行　｜　支援 * 萬用字元（如 Premium plan*）",
+        tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行　｜　支援 * 萬用字元",
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(0, 4))
         self._ql_text = tk.Text(self._excel_panel, height=5, bg="#313244", fg="#ffffff",
                                 font=("Microsoft JhengHei UI", 12), relief="flat",
@@ -1511,23 +1511,7 @@ class App(tk.Tk):
                                  command=self._quick_lookup)
         self._ql_btn.pack(anchor="w")
 
-        tk.Label(self._excel_panel, text="查詢結果", font=("Microsoft JhengHei UI", 10, "bold"),
-                 fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(8, 2))
-        ql_result_f = tk.Frame(self._excel_panel, bg="#27273a")
-        ql_result_f.pack(fill="both", expand=True)
-        self._ql_result_box = tk.Text(ql_result_f, height=8, bg="#11111b", fg="#cdd6f4",
-                                      font=("Courier", 11), relief="flat",
-                                      state="disabled", wrap="word",
-                                      selectbackground="#313244", selectforeground="#cdd6f4",
-                                      inactiveselectbackground="#313244")
-        ql_sb = ttk.Scrollbar(ql_result_f, command=self._ql_result_box.yview)
-        self._ql_result_box.configure(yscrollcommand=ql_sb.set)
-        self._ql_result_box.pack(side="left", fill="both", expand=True)
-        ql_sb.pack(side="right", fill="y")
-        self._ql_result_box.tag_config("ok",   foreground="#4caf50")
-        self._ql_result_box.tag_config("err",  foreground="#f44336")
-        self._ql_result_box.tag_config("info", foreground="#a6adc8")
-        self._ql_result_box.tag_config("ql",   foreground="#cba6f7")
+        # Quick-lookup results are written directly to the main log box below
 
         # ── Scan panel (right) ────────────────────────────────────────────────
         self._scan_panel = tk.Frame(right, bg="#27273a")
@@ -2152,15 +2136,10 @@ class App(tk.Tk):
         self.after(0, self._log_main, msg, tag)
 
     def _log_ql(self, msg: str, tag: str = None):
-        self.after(0, self._log_ql_main, msg, tag)
-
-    def _log_ql_main(self, msg: str, tag: str = None):
+        """Quick-lookup log — merged into main log box."""
         if tag is None:
             tag = "ok" if msg.startswith("✅") else "err" if msg.startswith("❌") else "ql"
-        self._ql_result_box.configure(state="normal")
-        self._ql_result_box.insert("end", msg + "\n", tag)
-        self._ql_result_box.see("end")
-        self._ql_result_box.configure(state="disabled")
+        self.after(0, self._log_main, msg, tag)
 
     def _log_main(self, msg: str, tag: str = None):
         if tag is None:
@@ -2190,12 +2169,6 @@ class App(tk.Tk):
 
         self._ql_btn.configure(state="disabled")
         self._progress.start(12)
-        self.after(0, lambda: (
-            self._ql_result_box.configure(state="normal"),
-            self._ql_result_box.delete("1.0", "end"),
-            self._ql_result_box.configure(state="disabled")
-        ))
-
         def worker():
             try:
                 index, norm_index = self._load_index(self._zip_path)
