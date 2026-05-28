@@ -10,11 +10,30 @@ from collections import defaultdict, OrderedDict
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v1.7.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v1.8.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v1.8
+────────────────────────────────────────
+新功能
+  • 快速查詢 & Excel 模式皆支援 * 萬用字元
+    → 輸入 Premium plan* 自動展開所有開頭符合的字串，各自輸出翻譯結果
+    → Excel 模式：一列萬用字元展開為多列，方便批次比對
+
+強化 / Bug 修正
+  • 模糊比對新增兩種正規化規則，命中率大幅提升：
+    → [[in %1$d days]] 型 placeholder 剝除 [[ ]] 外殼後再比對
+      （app 顯示的實際值如「in 7 days」可正確命中翻譯檔）
+    → 裝飾用單引號 'History' → History，與 app 顯示一致
+
+UI
+  • 全介面配色改為 Catppuccin Mocha 主題（深色、對比層次分明）
+  • 選取中的 App / 模式按鈕改用深色文字（#1e1e2e），確保淺紫背景上可讀
+  • Log / 查詢結果框選取色改為 #313244，消除系統亮藍高亮條
+
+────────────────────────────────────────
 v1.7
 ────────────────────────────────────────
 新功能
@@ -25,19 +44,12 @@ v1.7
   • 所有檔案欄位加上 Hover Tooltip，滑入顯示完整路徑，三個模式皆支援
 
 強化 / Bug 修正
-  • 快速查詢 & Excel 模式皆支援 * 萬用字元：輸入 Premium plan* 展開所有符合字串
-  • 模糊比對新增兩種正規化規則：
-    → [[in %1$d days]] 型 placeholder 剝除 [[ ]] 外殼後再比對（app 顯示的實際值可正確命中）
-    → 裝飾用單引號 'History' → History，與 app 顯示一致
   • 輸出檔已存在時跳出四選一彈窗：取代 / 自動加序號 / 取新名稱 / 取消
     → 三個模式（Excel 查詢、語言全掃描、轉換 Ignore）皆套用
   • 轉換 Ignore 語言 Sheet 偵測改用 Sheet 名稱大寫字母比對
     → FIL Extracted、FIL_Extraction 等命名變體皆可正常執行
 
 UI
-  • 全介面配色改為 Catppuccin Mocha 主題（深色、對比層次分明）
-  • 選取中的 App / 模式按鈕改用深色文字（#1e1e2e），確保淺紫背景上可讀
-  • Log / 查詢結果框選取色改為 #313244，消除系統亮藍高亮條
   • 全介面字型改為 Microsoft JhengHei UI（微軟正黑體 UI），中英文顯示更一致
 
 ────────────────────────────────────────
