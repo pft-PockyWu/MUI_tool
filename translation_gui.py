@@ -25,6 +25,7 @@ v1.7
   • 所有檔案欄位加上 Hover Tooltip，滑入顯示完整路徑，三個模式皆支援
 
 強化 / Bug 修正
+  • 快速查詢支援 * 萬用字元：輸入 Premium plan* 可列出所有開頭符合的字串及翻譯
   • 模糊比對新增兩種正規化規則：
     → [[in %1$d days]] 型 placeholder 剝除 [[ ]] 外殼後再比對（app 顯示的實際值可正確命中）
     → 裝飾用單引號 'History' → History，與 app 顯示一致
@@ -1469,7 +1470,7 @@ class App(tk.Tk):
 
         tk.Label(self._excel_panel, text="🔍  快速查詢",
                  font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
-        tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行",
+        tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行　｜　支援 * 萬用字元（如 Premium plan*）",
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(0, 4))
         self._ql_text = tk.Text(self._excel_panel, height=5, bg="#313244", fg="#ffffff",
                                 font=("Microsoft JhengHei UI", 12), relief="flat",
@@ -2179,6 +2180,27 @@ class App(tk.Tk):
 
                 self._log_ql("─────────────────────────────────────")
                 for q in queries:
+                    # ── Wildcard search (* glob) ───────────────────────────
+                    if '*' in q:
+                        import fnmatch
+                        hits = [(en, pd) for en, pd in index.items()
+                                if fnmatch.fnmatch(en.lower(), q.lower())]
+                        if not hits:
+                            self._log_ql(f"❌  查無字串: {q!r}", "err")
+                        else:
+                            self._log_ql(f"✅  {q!r}  → {len(hits)} 筆符合")
+                            for en_val, proj_dict in sorted(hits, key=lambda x: x[0].lower()):
+                                self._log_ql(f"   📝 {en_val}")
+                                for proj, pt in sorted(proj_dict.items()):
+                                    for lang, val in sorted(pt.items()):
+                                        if lang.startswith('_'): continue
+                                        if allowed and lang not in allowed: continue
+                                        code   = lang_label.get(lang, lang)
+                                        status = "🔴" if (not val or val.strip() == en_val.strip()) else "✅"
+                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}", "info")
+                        continue
+
+                    # ── Normal / fuzzy lookup ──────────────────────────────
                     rec = index.get(q)
                     matched = q
                     if not rec:
