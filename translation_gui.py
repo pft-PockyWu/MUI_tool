@@ -1670,12 +1670,18 @@ class App(tk.Tk):
         mode_hdr.pack(fill="x", pady=(0, 10))
         tk.Label(mode_hdr, text="選擇模式：", font=("Microsoft JhengHei UI", 11, "bold"),
                  fg="#a6adc8", bg=BG).pack(side="left", padx=(0, 8))
-        mode_btns = tk.Frame(mode_hdr, bg="#313244")
+        mode_btns = tk.Frame(mode_hdr, bg=BG)
         mode_btns.pack(side="left")
         self._mode_var     = tk.StringVar(value="excel")
         self._mode_buttons = {}
+        _mode_row1 = tk.Frame(mode_btns, bg="#313244")
+        _mode_row1.pack(fill="x", pady=(0, 2))
+        _mode_row2 = tk.Frame(mode_btns, bg="#313244")
+        _mode_row2.pack(fill="x")
+        _mode_rows = {"excel": _mode_row1, "scan": _mode_row1,
+                      "convert": _mode_row2, "diff": _mode_row2}
         for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"), ("convert", "轉換 Ignore"), ("diff", "比對新字串")]:
-            btn = tk.Button(mode_btns, text=label,
+            btn = tk.Button(_mode_rows[val], text=label,
                             font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
                             cursor="hand2", padx=14, pady=5, bd=0,
                             command=lambda v=val: self._set_mode(v))
@@ -2485,9 +2491,18 @@ class App(tk.Tk):
                     self._zip_old_path, self._zip_path,
                     self._diff_out_path, self._log_main
                 )
-                self.after(0, self._finish_run, self._diff_run_btn)
+                out_path = self._diff_out_path
+                if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
+                    import subprocess, os
+                    if sys.platform == "win32":    os.startfile(str(out_path))
+                    elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
+                    else:                          subprocess.Popen(["xdg-open", str(out_path)])
             except Exception as e:
+                import traceback
                 self.after(0, self._log_main, f"❌ 錯誤: {e}", "err")
+                self.after(0, self._log_main, traceback.format_exc(), "err")
+                messagebox.showerror("錯誤", str(e))
+            finally:
                 self.after(0, self._finish_run, self._diff_run_btn)
 
         threading.Thread(target=_task, daemon=True).start()
