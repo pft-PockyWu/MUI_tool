@@ -10,19 +10,29 @@ from collections import defaultdict, OrderedDict
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v1.9.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.0.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
-v1.9
+v2.0
 ────────────────────────────────────────
 新功能
   • 新增「比對新字串」模式：
     → 選取舊版與新版 Zip，一鍵輸出新版新增的英文字串
-    → 輸出 Excel（Sheet: 新增字串）含 Module / New Strings (EN) / Key 三欄
+    → 輸出 Excel（Sheet: 新增字串）含 Module / New Strings (EN) / Key 三欄，按 Module 排序分組
     → 自動加 Auto Filter、凍結首列、交替列色
+    → 四個模式路徑一致：選檔後自動記憶、切換 App 自動 reset/restore、
+      輸出檔已存在跳出四選一彈窗（與其他模式行為完全同步）
 
+UI
+  • 模式按鈕改為 2×2 等寬等高 Grid 排版，各按鈕間保留 3px 間距
+  • 比對新字串模式右側改為功能說明卡，不再顯示無關的快速查詢面板
+  • 四個執行按鈕統一改為藍色（#89b4fa）
+
+────────────────────────────────────────
+v1.9
+────────────────────────────────────────
 原有功能
   • 報告新增「Test Sheet」工作表：
     → 只列有黃色標記（最長字串）的語言與字串，相同翻譯去重
@@ -855,6 +865,7 @@ def compare_zips(old_zip: Path, new_zip: Path, output_xlsx: Path, log):
             keys = proj_data.get("_all_keys", [])
             for key in (keys or [""]):
                 rows.append((module, en, key))
+    rows.sort(key=lambda x: (x[0], x[1], x[2]))
 
     from openpyxl import Workbook as _WB
     from openpyxl.styles import PatternFill as _PF, Font as _Fnt, Alignment as _Aln, Border as _Brd, Side as _Sd
@@ -1578,6 +1589,8 @@ class App(tk.Tk):
 
         _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
         _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
+        _try_set(app_cfg.get("zip_old"),     self._zip_old_var,     "_zip_old_path")
+        _try_set(app_cfg.get("diff_out"),    self._diff_out_var,    "_diff_out_path")
 
         if self._zip_path or self._excel_path:
             self._log(f"📂 已載入上次 {app} 設定")
@@ -1604,6 +1617,10 @@ class App(tk.Tk):
             self._cfg[app]["convert_in"]  = str(self._convert_in_path)
         if self._convert_out_path:
             self._cfg[app]["convert_out"] = str(self._convert_out_path)
+        if self._zip_old_path:
+            self._cfg[app]["zip_old"]  = str(self._zip_old_path)
+        if self._diff_out_path:
+            self._cfg[app]["diff_out"] = str(self._diff_out_path)
         if hasattr(self, '_scan_lang_vars'):
             self._cfg[app]["scan_langs"] = [l for l, v in self._scan_lang_vars.items() if v.get()]
         self._cfg["last_app"] = app
@@ -1674,18 +1691,21 @@ class App(tk.Tk):
         mode_btns.pack(side="left")
         self._mode_var     = tk.StringVar(value="excel")
         self._mode_buttons = {}
-        _mode_row1 = tk.Frame(mode_btns, bg="#313244")
-        _mode_row1.pack(fill="x", pady=(0, 2))
-        _mode_row2 = tk.Frame(mode_btns, bg="#313244")
-        _mode_row2.pack(fill="x")
-        _mode_rows = {"excel": _mode_row1, "scan": _mode_row1,
-                      "convert": _mode_row2, "diff": _mode_row2}
-        for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"), ("convert", "轉換 Ignore"), ("diff", "比對新字串")]:
-            btn = tk.Button(_mode_rows[val], text=label,
+        # 2×2 grid: equal-width columns (uniform group), 3 px gaps
+        mode_btns.columnconfigure(0, weight=1, uniform="mc")
+        mode_btns.columnconfigure(1, weight=1, uniform="mc")
+        _mode_grid = {"excel": (0, 0), "scan": (0, 1),
+                      "convert": (1, 0), "diff": (1, 1)}
+        for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"),
+                            ("convert", "轉換 Ignore"), ("diff", "比對新字串")]:
+            r, c = _mode_grid[val]
+            btn = tk.Button(mode_btns, text=label,
                             font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
                             cursor="hand2", padx=14, pady=5, bd=0,
                             command=lambda v=val: self._set_mode(v))
-            btn.pack(side="left")
+            btn.grid(row=r, column=c, sticky="ew",
+                     padx=(0, 3) if c == 0 else 0,
+                     pady=(0, 3) if r == 0 else 0)
             self._mode_buttons[val] = btn
         self._set_mode("excel", init=True)
 
@@ -1762,33 +1782,35 @@ class App(tk.Tk):
         # Run buttons (left column bottom)
         run_row = tk.Frame(left, bg=BG)
         run_row.pack(fill="x")
+        _RUN_BG     = "#89b4fa"
+        _RUN_BG_ACT = "#74a8e6"
         self._run_btn = tk.Button(run_row, text="▶  Run",
                                   font=("Microsoft JhengHei UI", 14, "bold"),
-                                  bg="#cba6f7", fg="white",
-                                  activebackground="#b4befe",
+                                  bg=_RUN_BG, fg="white",
+                                  activebackground=_RUN_BG_ACT,
                                   activeforeground="white", relief="flat",
                                   padx=20, pady=8, cursor="hand2",
                                   command=self._run)
         self._run_btn.pack(side="left", padx=(0, 8))
         self._scan_run_btn = tk.Button(run_row, text="▶  開始掃描",
                                        font=("Microsoft JhengHei UI", 14, "bold"),
-                                       bg="#89b4fa", fg="white",
-                                       activebackground="#74a8e6",
+                                       bg=_RUN_BG, fg="white",
+                                       activebackground=_RUN_BG_ACT,
                                        activeforeground="white", relief="flat",
                                        padx=20, pady=8, cursor="hand2",
                                        command=self._run_scan)
         self._convert_run_btn = tk.Button(run_row, text="▶  轉換",
                                           font=("Microsoft JhengHei UI", 14, "bold"),
-                                          bg="#cba6f7", fg="white",
-                                          activebackground="#b4befe",
+                                          bg=_RUN_BG, fg="white",
+                                          activebackground=_RUN_BG_ACT,
                                           activeforeground="white", relief="flat",
                                           padx=20, pady=8, cursor="hand2",
                                           command=self._run_convert)
         self._diff_run_btn = tk.Button(run_row, text="▶  比對",
                                        font=("Microsoft JhengHei UI", 14, "bold"),
-                                       bg="#cba6f7", fg="white",
-                                       activebackground="#b4befe", activeforeground="white",
-                                       relief="flat", padx=20, pady=6,
+                                       bg=_RUN_BG, fg="white",
+                                       activebackground=_RUN_BG_ACT, activeforeground="white",
+                                       relief="flat", padx=20, pady=8,
                                        cursor="hand2", command=self._run_diff)
         self._cancel_btn = tk.Button(run_row, text="■  取消",
                                      font=("Microsoft JhengHei UI", 14, "bold"),
@@ -1846,6 +1868,23 @@ class App(tk.Tk):
                      "    （忽略「語言」欄可能包含的多語言值）\n"
                      "  • 多個 Key 同格（換行分隔）自動拆分\n"
                      "  • 同一 Key 多語言皆 Pass → 合併為同一列"
+                 ),
+                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
+                 justify="left").pack(anchor="w", pady=(6, 0))
+
+        # ── Diff panel (right) ────────────────────────────────────────────────
+        self._diff_panel = tk.Frame(right, bg="#27273a")
+        tk.Label(self._diff_panel, text="🆚  比對新字串",
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
+        tk.Label(self._diff_panel,
+                 text=(
+                     "選取舊版與新版翻譯 Zip，一鍵找出新版新增的英文字串。\n\n"
+                     "輸出欄位：\n"
+                     "  • Module            — 字串所屬模組\n"
+                     "  • New Strings (EN)  — 新增的英文原文\n"
+                     "  • Key               — 對應的翻譯 Key\n\n"
+                     "輸出結果按 Module 排序，方便逐模組確認。\n"
+                     "支援 Auto Filter，可快速篩選特定模組。"
                  ),
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
                  justify="left").pack(anchor="w", pady=(6, 0))
@@ -2019,6 +2058,7 @@ class App(tk.Tk):
             self._zip_path = self._excel_path = self._out_path = self._ignore_path = None
             self._scan_out_path = None
             self._convert_in_path = self._convert_out_path = None
+            self._zip_old_path = self._diff_out_path = None
             self._zip_var.set("尚未選取")
             self._excel_var.set("尚未選取")
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
@@ -2026,6 +2066,8 @@ class App(tk.Tk):
             self._scan_out_var.set("尚未選取")
             self._convert_in_var.set("尚未選取")
             self._convert_out_var.set("尚未選取")
+            self._zip_old_var.set("尚未選取")
+            self._diff_out_var.set("尚未選取")
 
             app_cfg = self._cfg.get(app_name, {})
             def _try_set(path_str, var, attr):
@@ -2044,6 +2086,8 @@ class App(tk.Tk):
 
             _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
             _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
+            _try_set(app_cfg.get("zip_old"),     self._zip_old_var,     "_zip_old_path")
+            _try_set(app_cfg.get("diff_out"),    self._diff_out_var,    "_diff_out_path")
 
             self._cfg["last_app"] = app_name
             save_config(self._cfg)
@@ -2124,27 +2168,18 @@ class App(tk.Tk):
             self._set_file_row_state(self._out_row,   excel_mode)
 
         if not init:
+            # Hide all right panels first
+            for _p in ("_excel_panel", "_scan_panel", "_convert_panel", "_diff_panel"):
+                if hasattr(self, _p):
+                    getattr(self, _p).pack_forget()
             if mode == "excel":
-                self._scan_panel.pack_forget()
-                if hasattr(self, '_convert_panel'):
-                    self._convert_panel.pack_forget()
                 self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
             elif mode == "scan":
-                self._excel_panel.pack_forget()
-                if hasattr(self, '_convert_panel'):
-                    self._convert_panel.pack_forget()
                 self._scan_panel.pack(fill="both", expand=True, padx=12, pady=10)
             elif mode == "convert":
-                self._excel_panel.pack_forget()
-                self._scan_panel.pack_forget()
                 self._convert_panel.pack(fill="both", expand=True, padx=12, pady=10)
             else:  # diff
-                self._excel_panel.pack_forget()
-                self._scan_panel.pack_forget()
-                if hasattr(self, '_convert_panel'):
-                    self._convert_panel.pack_forget()
-                # diff mode uses the main log panel — re-show excel_panel (it has the log)
-                self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._diff_panel.pack(fill="both", expand=True, padx=12, pady=10)
 
     def _clear_ignore(self):
         self._ignore_path = None
@@ -2305,6 +2340,7 @@ class App(tk.Tk):
         self._cancel_btn.pack(side="left")
         self._progress.configure(mode="indeterminate")
         self._progress.start(12)
+        self._progress_label.configure(text="")
         self._log_box.configure(state="normal")
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
@@ -2447,7 +2483,8 @@ class App(tk.Tk):
         p = filedialog.askopenfilename(title="選取舊版翻譯 Zip", filetypes=[("Zip", "*.zip")])
         if p:
             self._zip_old_path = Path(p)
-            self._zip_old_var.set(Path(p).name)
+            self._zip_old_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
 
     def _pick_diff_out(self):
         p = filedialog.asksaveasfilename(
@@ -2456,7 +2493,8 @@ class App(tk.Tk):
             initialfile="new_strings.xlsx")
         if p:
             self._diff_out_path = Path(p)
-            self._diff_out_var.set(Path(p).name)
+            self._diff_out_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
 
     def _run_diff(self):
         if not self._zip_old_path:
@@ -2466,7 +2504,16 @@ class App(tk.Tk):
         if not self._diff_out_path:
             default = self._zip_path.parent / "new_strings.xlsx"
             self._diff_out_path = default
-            self._diff_out_var.set(default.name)
+            self._diff_out_var.set(self._fmt_name(default.name))
+            self._save_app_paths()
+
+        if self._diff_out_path.exists():
+            resolved = self._ask_file_exists(self._diff_out_path)
+            if resolved is None:
+                return
+            self._diff_out_path = resolved
+            self._diff_out_var.set(self._fmt_name(resolved.name))
+            self._save_app_paths()
 
         self._log_main("─" * 40)
         self._log_main(f"🆚 比對新字串")
@@ -2481,6 +2528,7 @@ class App(tk.Tk):
         self._cancel_btn.pack(side="left")
         self._progress.configure(mode="indeterminate")
         self._progress.start(12)
+        self._progress_label.configure(text="")
         self._log_box.configure(state="normal")
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
