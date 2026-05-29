@@ -1,4 +1,4 @@
-ï»¿@echo off
+@echo off
 chcp 65001 >nul
 echo [1/2] Installing dependencies...
 pip install openpyxl pandas pyinstaller
@@ -6,7 +6,7 @@ pip install openpyxl pandas pyinstaller
 powershell -NoProfile -Command "Get-Date -Format 'yyMMdd_HHmm'" > %TEMP%\mui_stamp.tmp
 set /p STAMP=< %TEMP%\mui_stamp.tmp
 del %TEMP%\mui_stamp.tmp 2>nul
-set FNAME=MUI_tool_1_8_%STAMP%
+set FNAME=MUI_tool_1_9_%STAMP%
 
 echo [2/2] Building executable...
 powershell -Command "(Get-Content translation_gui.py -Encoding UTF8) -replace 'BUILD_DATETIME', '%STAMP%' | Set-Content translation_gui_build.py -Encoding UTF8"
@@ -15,7 +15,7 @@ del translation_gui_build.py 2>nul
 
 echo Done! Find %FNAME%.exe in the dist folder.
 echo.
-set /p UPLOAD="ä¸Šå‚³è‡³ Google Driveï¼Ÿ(Y/N): "
+set /p UPLOAD="¤W¶Ç¦Ü Google Drive¡H(Y/N): "
 if /i "%UPLOAD%"=="Y" (
     echo [3/3] Uploading to Google Drive...
     python upload_to_drive.py

@@ -10,7 +10,7 @@ from collections import defaultdict, OrderedDict
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v1.8.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v1.9.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
 
@@ -18,6 +18,10 @@ CHANGELOG = """\
 v1.8
 ────────────────────────────────────────
 新功能
+  • 產生的報告新增「Test Sheet」：
+    → 只列有黃色標記（最長字串）的語言與字串，相同翻譯去重
+    → 欄位：Language / Page / Module / EN (Base) / Translation / Tester / Test result
+    → 右側統計表顯示每語言字串數 + Total，支援 Auto Filter
   • 快速查詢 & Excel 模式皆支援 * 萬用字元
     → 輸入 Premium plan* 自動展開所有開頭符合的字串，各自輸出翻譯結果
     → Excel 模式：一列萬用字元展開為多列，方便批次比對
@@ -975,6 +979,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.fill, c.font, c.alignment, c.border = HEADER, H_FONT, CENTER, BORDER
     ws.row_dimensions[1].height = 32
 
+    test_rows: list = []   # collects (lang_header, page, module, en, trans, fill_hex) for Test Sheet
+
     for ri, rd in enumerate(rows_data, 2):
         en_val    = rd["en"]
         trans     = rd["trans"]
@@ -1054,8 +1060,10 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                     c.fill, c.font = RED, D_FONT
             elif lang in max_langs:
                 c.fill, c.font = YELLOW, B_FONT
+                test_rows.append((_hdr(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFD700"))
             elif lang in second_langs:
                 c.fill, c.font = YELLOW2, B_FONT
+                test_rows.append((_hdr(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFF176"))
             else:
                 c.font = D_FONT
 
@@ -1076,7 +1084,77 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     # Only measure translation columns (E+) and EN column (C) for height calculation
     _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {"C"})
 
-    # ── Sheet 2: 翻譯問題報告 ────────────────────────────────────────────────
+    # ── Sheet 2: Test Sheet ───────────────────────────────────────────────────
+    seen_test: set = set()
+    test_rows_dedup: list = []
+    for _tr in test_rows:
+        _key = (_tr[0], str(_tr[4] or "").strip())
+        if _key not in seen_test:
+            seen_test.add(_key)
+            test_rows_dedup.append(_tr)
+    test_rows_dedup.sort(key=lambda x: x[0])
+
+    ts = wb.create_sheet("Test Sheet")
+    TS_TR_FILL = PatternFill("solid", fgColor="D9EAD3")
+    TS_TR_FONT = Font(bold=True, color="000000", name="Microsoft JhengHei UI", size=10)
+
+    for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
+        _c = ts.cell(row=1, column=_ci, value=_h)
+        _c.alignment = CENTER
+        _c.border    = BORDER
+        if _h in ("Tester", "Test result"):
+            _c.fill = TS_TR_FILL
+            _c.font = TS_TR_FONT
+        else:
+            _c.fill = HEADER
+            _c.font = H_FONT
+    ts.row_dimensions[1].height = 32
+
+    for _r, (_lang, _page, _module, _en, _trans, _fill_hex) in enumerate(test_rows_dedup, 2):
+        for _ci, _v in enumerate([_lang, _page, _module, _en, _trans, None, None], 1):
+            _c = ts.cell(row=_r, column=_ci, value=_v)
+            _c.font      = Font(name="Microsoft JhengHei UI", size=10)
+            _c.alignment = LEFT
+            _c.border    = BORDER
+            if _ci == 5:
+                _c.fill = PatternFill("solid", fgColor="FF" + _fill_hex)
+        ts.row_dimensions[_r].height = 36
+
+    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 14, 20]):
+        ts.column_dimensions[_col].width = _w
+
+    ts.freeze_panes = "A2"
+    ts.auto_filter.ref = f"A1:G{len(test_rows_dedup) + 1}"
+
+    # Summary table at cols I–J (col H = spacer)
+    _sum_val_fill = PatternFill("solid", fgColor="F5F5F5")
+    _sum_ttl_fill = PatternFill("solid", fgColor="4A4580")
+    for _col, _h in zip([9, 10], ["Language", "# Strings"]):
+        _c = ts.cell(row=1, column=_col, value=_h)
+        _c.fill = HEADER; _c.font = H_FONT; _c.alignment = CENTER
+
+    from collections import Counter as _Counter
+    _lang_counts = _Counter(_tr[0] for _tr in test_rows_dedup)
+    for _i, (_lang, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
+        _lc = ts.cell(row=_i, column=9, value=_lang)
+        _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = _sum_val_fill; _lc.alignment = LEFT
+        _nc = ts.cell(row=_i, column=10, value=_cnt)
+        _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = _sum_val_fill; _nc.alignment = CENTER
+
+    _total_r = 2 + len(_lang_counts)
+    _tc = ts.cell(row=_total_r, column=9, value="Total")
+    _tc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
+    _tc.fill = _sum_ttl_fill; _tc.alignment = CENTER
+    _tv = ts.cell(row=_total_r, column=10, value=len(test_rows_dedup))
+    _tv.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
+    _tv.fill = _sum_ttl_fill; _tv.alignment = CENTER
+
+    ts.column_dimensions["H"].width = 4
+    ts.column_dimensions["I"].width = 22
+    ts.column_dimensions["J"].width = 12
+    log(f"🧪 Test Sheet: {len(test_rows_dedup)} 筆（{len(_lang_counts)} 個語言）")
+
+    # ── Sheet 3: 翻譯問題報告 ────────────────────────────────────────────────
     rpt = wb.create_sheet("翻譯問題報告")
     RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
 
@@ -1167,7 +1245,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
     log(f"📋 翻譯問題報告: {len(sorted_groups)} 筆（{sum(len(v) for v in rpt_groups.values())} 個問題）")
 
-    # ── Sheet 3: 說明 ─────────────────────────────────────────────────────────
+    # ── Sheet 4: 說明 ─────────────────────────────────────────────────────────
     ls = wb.create_sheet("說明")
     for ri, (a, b) in enumerate([
         ("色彩說明", ""),
