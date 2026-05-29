@@ -15,7 +15,7 @@ del translation_gui_build.py 2>nul
 
 echo Done! Find %FNAME%.exe in the dist folder.
 echo.
-set /p UPLOAD="¤W¶Ç¦Ü Google Drive¡H(Y/N): "
+set /p UPLOAD="Upload to Google Drive? (Y/N): "
 if /i "%UPLOAD%"=="Y" (
     echo [3/3] Uploading to Google Drive...
     python upload_to_drive.py
