@@ -963,6 +963,12 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         name = LANG_NAMES.get(l, "")
         return f"{code}\n{name}" if name else code
 
+    def _ts_lang(l):
+        """Single-line language label for Test Sheet: 'ARA (阿拉伯語)'"""
+        code = lang_label.get(l, l)
+        name = LANG_NAMES.get(l, "")
+        return f"{code} ({name})" if name else code
+
     MODULE_FILL   = PatternFill("solid", fgColor="FFFFFF")
     MODULE_FONT   = Font(name="Microsoft JhengHei UI", size=9, color="302B63")
     NF_FILL       = PatternFill("solid", fgColor="FFF3CD")
@@ -1060,12 +1066,18 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                     c.fill, c.font = RED, D_FONT
             elif lang in max_langs:
                 c.fill, c.font = YELLOW, B_FONT
-                test_rows.append((_hdr(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFD700"))
+                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFD700"))
             elif lang in second_langs:
                 c.fill, c.font = YELLOW2, B_FONT
-                test_rows.append((_hdr(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFF176"))
+                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFF176"))
             else:
                 c.font = D_FONT
+
+        # Not-found strings come from the server — expand one row per language
+        if rd["not_found"] and rd["is_first"]:
+            for _sl in sorted_langs:
+                if _sl == "en": continue
+                test_rows.append((_ts_lang(_sl), rd["page"], "⚠️ Server string", en_val, None, "FFF3CD"))
 
     ws.column_dimensions["A"].width = 16
     ws.column_dimensions["B"].width = 40   # Module — longest: pf-flutter-photo-editing-copilot-doc (36)
@@ -1085,74 +1097,182 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {"C"})
 
     # ── Sheet 2: Test Sheet ───────────────────────────────────────────────────
+    # Dedup: yellow rows → (lang, trans); server rows → (lang, en)
     seen_test: set = set()
     test_rows_dedup: list = []
     for _tr in test_rows:
-        _key = (_tr[0], str(_tr[4] or "").strip())
+        _key = (_tr[0], str(_tr[3] or "")) if _tr[4] is None else (_tr[0], str(_tr[4] or "").strip())
         if _key not in seen_test:
             seen_test.add(_key)
             test_rows_dedup.append(_tr)
     test_rows_dedup.sort(key=lambda x: x[0])
 
-    ts = wb.create_sheet("Test Sheet")
-    TS_TR_FILL = PatternFill("solid", fgColor="D9EAD3")
-    TS_TR_FONT = Font(bold=True, color="000000", name="Microsoft JhengHei UI", size=10)
+    from collections import Counter as _Counter
+    import heapq as _heapq
+    _lang_counts  = _Counter(_tr[0] for _tr in test_rows_dedup)
+    _n_langs      = len(_lang_counts)
+    _MAX_T        = 6    # max supported testers
+    _n_testers    = max(2, min(_MAX_T, max(1, _n_langs // 2)))
+    # Sort languages by string count desc — heaviest langs distributed first
+    _langs_by_cnt = [_l for _l, _ in sorted(_lang_counts.items(), key=lambda x: -x[1])]
 
+    # Greedy bin-packing for each n in 2..MAX_T
+    # Result: _precomp[n][lang] = tester_number (1-indexed)
+    def _greedy(n):
+        _h = [(0, i + 1) for i in range(min(n, _n_langs))]
+        _heapq.heapify(_h)
+        _res = {}
+        for _l in _langs_by_cnt:
+            _tot, _ti = _heapq.heappop(_h)
+            _res[_l] = _ti
+            _heapq.heappush(_h, (_tot + _lang_counts[_l], _ti))
+        return _res
+    _precomp = {_n: _greedy(_n) for _n in range(2, _MAX_T + 1)}
+
+    # Column layout:
+    #  A–G  main table   H spacer   I–J summary   K spacer
+    #  L–M  config (labels / editable name cells)  N spacer
+    #  O    lang (sorted by count desc)
+    #  P–U  greedy tester# for n=2,3,4,5,6  (5 cols; U = col 21)
+    _CFG_COL    = 12   # L
+    _NAME_COL   = 13   # M
+    _ASGN_LANG  = 15   # O
+    _ASGN_START = 16   # P = n=2 … T = n=6
+
+    ts = wb.create_sheet("Test Sheet")
+    TS_TR_FILL   = PatternFill("solid", fgColor="D9EAD3")
+    TS_TR_FONT   = Font(bold=True, color="000000", name="Microsoft JhengHei UI", size=10)
+    TS_EDIT_FILL = PatternFill("solid", fgColor="FFF9C4")
+    TS_CFG_FILL  = PatternFill("solid", fgColor="302B63")
+    TS_SUM_FILL  = PatternFill("solid", fgColor="F5F5F5")
+    TS_TTL_FILL  = PatternFill("solid", fgColor="4A4580")
+    TS_SRV_FILL  = PatternFill("solid", fgColor="FFF3CD")
+    _GRP_FILLS   = [PatternFill("solid", fgColor="FFE3F2FD"),
+                    PatternFill("solid", fgColor="FFFFFFFF")]
+
+    # ranges used by formula (fixed; always covers max possible rows)
+    _name_rng = f"$M$3:$M${2 + _MAX_T}"           # M3:M8
+    _lang_rng = f"$O$2:$O${1 + _n_langs}"
+    _data_rng = f"$P$2:$T${1 + _n_langs}"          # 5 precomputed cols
+
+    # ── Header row ──
     for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
         _c = ts.cell(row=1, column=_ci, value=_h)
-        _c.alignment = CENTER
-        _c.border    = BORDER
+        _c.alignment = CENTER; _c.border = BORDER
         if _h in ("Tester", "Test result"):
-            _c.fill = TS_TR_FILL
-            _c.font = TS_TR_FONT
+            _c.fill = TS_TR_FILL; _c.font = TS_TR_FONT
         else:
-            _c.fill = HEADER
-            _c.font = H_FONT
+            _c.fill = HEADER; _c.font = H_FONT
     ts.row_dimensions[1].height = 32
 
+    # ── Data rows (alternating bg per language group) ──
+    _n_data    = len(test_rows_dedup)
+    _prev_lang = None
+    _grp_idx   = -1
+
     for _r, (_lang, _page, _module, _en, _trans, _fill_hex) in enumerate(test_rows_dedup, 2):
+        if _lang != _prev_lang:
+            _grp_idx  += 1
+            _prev_lang = _lang
+        _row_bg    = _GRP_FILLS[_grp_idx % 2]
+        _is_server = (_trans is None)
+
+        _LANG_ALIGN = Alignment(horizontal="left", vertical="center", wrap_text=False)
         for _ci, _v in enumerate([_lang, _page, _module, _en, _trans, None, None], 1):
             _c = ts.cell(row=_r, column=_ci, value=_v)
-            _c.font      = Font(name="Microsoft JhengHei UI", size=10)
-            _c.alignment = LEFT
-            _c.border    = BORDER
+            _c.font = Font(name="Microsoft JhengHei UI", size=10)
+            _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
+            _c.border = BORDER
             if _ci == 5:
-                _c.fill = PatternFill("solid", fgColor="FF" + _fill_hex)
-        ts.row_dimensions[_r].height = 36
+                _c.fill = TS_SRV_FILL if _is_server else PatternFill("solid", fgColor="FF" + _fill_hex)
+            else:
+                _c.fill = _row_bg
 
-    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 14, 20]):
+        # Tester col — INDEX into precomputed table, column selected by M2
+        # MAX(1,MIN(5,$M$2-1)): M2=2→col1(P n=2) … M2=6→col5(T n=6)
+        _tc = ts.cell(row=_r, column=6)
+        _tc.value = (f'=IFERROR(INDEX({_name_rng},'
+                     f'INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),'
+                     f'MAX(1,MIN(5,$M$2-1)))),"")')
+        _tc.font = Font(name="Microsoft JhengHei UI", size=10)
+        _tc.alignment = CENTER; _tc.border = BORDER; _tc.fill = _row_bg
+        ts.row_dimensions[_r].height = 18
+
+    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 18, 20]):
         ts.column_dimensions[_col].width = _w
-
     ts.freeze_panes = "A2"
-    ts.auto_filter.ref = f"A1:G{len(test_rows_dedup) + 1}"
+    ts.auto_filter.ref = f"A1:G{_n_data + 1}"
 
-    # Summary table at cols I–J (col H = spacer)
-    _sum_val_fill = PatternFill("solid", fgColor="F5F5F5")
-    _sum_ttl_fill = PatternFill("solid", fgColor="4A4580")
+    # ── Summary  cols I–J ──
     for _col, _h in zip([9, 10], ["Language", "# Strings"]):
         _c = ts.cell(row=1, column=_col, value=_h)
         _c.fill = HEADER; _c.font = H_FONT; _c.alignment = CENTER
-
-    from collections import Counter as _Counter
-    _lang_counts = _Counter(_tr[0] for _tr in test_rows_dedup)
-    for _i, (_lang, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
-        _lc = ts.cell(row=_i, column=9, value=_lang)
-        _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = _sum_val_fill; _lc.alignment = LEFT
+    for _i, (_l, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
+        _lc = ts.cell(row=_i, column=9, value=_l)
+        _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
         _nc = ts.cell(row=_i, column=10, value=_cnt)
-        _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = _sum_val_fill; _nc.alignment = CENTER
+        _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = TS_SUM_FILL; _nc.alignment = CENTER
+    _sum_ttl_r = 2 + _n_langs
+    for _col, _v in [(9, "Total"), (10, _n_data)]:
+        _tc2 = ts.cell(row=_sum_ttl_r, column=_col, value=_v)
+        _tc2.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
+        _tc2.fill = TS_TTL_FILL; _tc2.alignment = CENTER
 
-    _total_r = 2 + len(_lang_counts)
-    _tc = ts.cell(row=_total_r, column=9, value="Total")
-    _tc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
-    _tc.fill = _sum_ttl_fill; _tc.alignment = CENTER
-    _tv = ts.cell(row=_total_r, column=10, value=len(test_rows_dedup))
-    _tv.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
-    _tv.fill = _sum_ttl_fill; _tv.alignment = CENTER
+    # ── Tester Config  cols L–M (always 6 slots) ──
+    _cfg_hdr = ts.cell(row=1, column=_CFG_COL, value="Tester 設定")
+    _cfg_hdr.fill = TS_CFG_FILL; _cfg_hdr.font = H_FONT; _cfg_hdr.alignment = CENTER
+    ts.merge_cells(start_row=1, start_column=_CFG_COL, end_row=1, end_column=_NAME_COL)
 
+    _lbl_font = Font(name="Microsoft JhengHei UI", size=10)
+    ts.cell(row=2, column=_CFG_COL, value="人數 / # Testers").font = _lbl_font
+    _cnt_v = ts.cell(row=2, column=_NAME_COL, value=_n_testers)
+    _cnt_v.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
+    _cnt_v.fill = TS_EDIT_FILL; _cnt_v.alignment = CENTER
+
+    for _ti in range(1, _MAX_T + 1):   # always show all 6 slots
+        _rr = 2 + _ti
+        ts.cell(row=_rr, column=_CFG_COL, value=f"Tester {_ti}").font = _lbl_font
+        _nm = ts.cell(row=_rr, column=_NAME_COL, value=f"Tester {_ti}")
+        _nm.fill = TS_EDIT_FILL
+        _nm.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nm.alignment = CENTER
+
+    _note_r = 3 + _MAX_T
+    _note = ts.cell(row=_note_r, column=_CFG_COL,
+                    value="改 M2（2–6）或姓名，Tester 欄自動更新")
+    _note.font = Font(name="Microsoft JhengHei UI", size=8, color="888888", italic=True)
+    ts.merge_cells(start_row=_note_r, start_column=_CFG_COL,
+                   end_row=_note_r,   end_column=_NAME_COL)
+
+    # ── Assignment table  col O (lang) + cols P–T (greedy result for n=2..6) ──
+    _ah_font = Font(name="Microsoft JhengHei UI", size=9, bold=True, color="FFFFFF")
+    ts.cell(row=1, column=_ASGN_LANG, value="Language").fill = TS_CFG_FILL
+    ts.cell(row=1, column=_ASGN_LANG).font      = _ah_font
+    ts.cell(row=1, column=_ASGN_LANG).alignment = CENTER
+    for _ni, _n in enumerate(range(2, _MAX_T + 1)):
+        _hc = ts.cell(row=1, column=_ASGN_START + _ni, value=f"n={_n}")
+        _hc.fill = TS_CFG_FILL; _hc.font = _ah_font; _hc.alignment = CENTER
+
+    for _ai, _l in enumerate(_langs_by_cnt, 2):
+        _lc = ts.cell(row=_ai, column=_ASGN_LANG, value=_l)
+        _lc.font = Font(name="Microsoft JhengHei UI", size=9); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
+        for _ni, _n in enumerate(range(2, _MAX_T + 1)):
+            _vc = ts.cell(row=_ai, column=_ASGN_START + _ni, value=_precomp[_n].get(_l, 0))
+            _vc.font = Font(name="Microsoft JhengHei UI", size=9, bold=True)
+            _vc.fill = TS_SUM_FILL; _vc.alignment = CENTER
+
+    # Column widths
     ts.column_dimensions["H"].width = 4
     ts.column_dimensions["I"].width = 22
     ts.column_dimensions["J"].width = 12
-    log(f"🧪 Test Sheet: {len(test_rows_dedup)} 筆（{len(_lang_counts)} 個語言）")
+    ts.column_dimensions["K"].width = 4
+    ts.column_dimensions[get_column_letter(_CFG_COL)].width  = 22
+    ts.column_dimensions[get_column_letter(_NAME_COL)].width = 18
+    ts.column_dimensions["N"].width = 4
+    ts.column_dimensions[get_column_letter(_ASGN_LANG)].width = 22
+    for _ni in range(_MAX_T - 1):   # cols P–T, 5 cols
+        ts.column_dimensions[get_column_letter(_ASGN_START + _ni)].width = 7
+
+    log(f"🧪 Test Sheet: {_n_data} 筆（{_n_langs} 個語言，預設 {_n_testers} 位 Tester，支援 2–{_MAX_T} 人）")
 
     # ── Sheet 3: 翻譯問題報告 ────────────────────────────────────────────────
     rpt = wb.create_sheet("翻譯問題報告")
