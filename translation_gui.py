@@ -4,9 +4,9 @@ MUI Translation Tool — GUI Version
 雙擊執行，選 zip + Excel，按 Run 即可。
 """
 
-import json, re, sys, zipfile, threading
+import json, re, sys, zipfile, threading, heapq, os
 from pathlib import Path
-from collections import defaultdict, OrderedDict
+from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -324,12 +324,26 @@ BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 # ── Config persistence (#6) ───────────────────────────────────────────────────
 import tempfile as _tempfile
-_CONFIG_PATH = Path(_tempfile.gettempdir()) / "TranslationTool" / "config.json"
+
+# Store config in a stable OS-appropriate location (not tempdir which can be wiped)
+if sys.platform == "win32":
+    _cfg_base = Path(os.environ.get("APPDATA", str(Path.home())))
+elif sys.platform == "darwin":
+    _cfg_base = Path.home() / "Library" / "Application Support"
+else:
+    _cfg_base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+_CONFIG_PATH     = _cfg_base / "TranslationTool" / "config.json"
+_OLD_CONFIG_PATH = Path(_tempfile.gettempdir()) / "TranslationTool" / "config.json"
 
 def load_config() -> dict:
     try:
         if _CONFIG_PATH.exists():
             return json.loads(_CONFIG_PATH.read_text("utf-8"))
+        # Migrate from old tempdir location (one-time)
+        if _OLD_CONFIG_PATH.exists():
+            data = json.loads(_OLD_CONFIG_PATH.read_text("utf-8"))
+            save_config(data)   # write to new location immediately
+            return data
     except Exception:
         pass
     return {}
@@ -847,13 +861,9 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     log(f"✅ 輸出完成: {output_xlsx.name}")
 
 
-def compare_zips(old_zip: Path, new_zip: Path, output_xlsx: Path, log):
-    """Compare two zip files; output strings added in new_zip vs old_zip."""
-    log("🔍 建立舊版索引...")
-    old_index, _ = build_index(old_zip, "en", log)
-    log("🔍 建立新版索引...")
-    new_index, _ = build_index(new_zip, "en", log)
-
+def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
+                 cancel_event=None):
+    """Compare two pre-built indexes; write strings added in new_index vs old_index."""
     old_keys = set(old_index.keys())
     new_keys = set(new_index.keys())
     added    = sorted(new_keys - old_keys)
@@ -861,37 +871,30 @@ def compare_zips(old_zip: Path, new_zip: Path, output_xlsx: Path, log):
 
     rows = []
     for en in added:
+        if cancel_event and cancel_event.is_set():
+            log("⚠️  已取消"); return
         for module, proj_data in sorted(new_index[en].items()):
             keys = proj_data.get("_all_keys", [])
             for key in (keys or [""]):
                 rows.append((module, en, key))
     rows.sort(key=lambda x: (x[0], x[1], x[2]))
 
-    from openpyxl import Workbook as _WB
-    from openpyxl.styles import PatternFill as _PF, Font as _Fnt, Alignment as _Aln, Border as _Brd, Side as _Sd
-    from openpyxl.utils import get_column_letter as _gcl
+    # Uses module-level Workbook / styles (already imported at top)
+    _alt_fill = PatternFill("solid", fgColor="F5F3FF")
 
-    wb = _WB()
+    wb = Workbook()
     ws = wb.active
     ws.title = "新增字串"
-    _thin   = _Sd(style="thin", color="DDDDDD")
-    _border = _Brd(left=_thin, right=_thin, top=_thin, bottom=_thin)
-    _hdr_fill = _PF("solid", fgColor="302B63")
-    _hdr_font = _Fnt(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
-    _d_font   = _Fnt(name="Microsoft JhengHei UI", size=10)
-    _center   = _Aln(horizontal="center", vertical="center")
-    _left     = _Aln(horizontal="left", vertical="top", wrap_text=True)
-    _alt_fill = _PF("solid", fgColor="F5F3FF")
 
     for ci, h in enumerate(["Module", "New Strings (EN)", "Key"], 1):
         c = ws.cell(row=1, column=ci, value=h)
-        c.fill = _hdr_fill; c.font = _hdr_font; c.alignment = _center; c.border = _border
+        c.fill = HEADER; c.font = H_FONT; c.alignment = CENTER; c.border = BORDER
     ws.row_dimensions[1].height = 24
 
     for ri, (module, en, key) in enumerate(rows, 2):
         for ci, v in enumerate([module, en, key], 1):
             c = ws.cell(row=ri, column=ci, value=v)
-            c.font = _d_font; c.alignment = _left; c.border = _border
+            c.font = D_FONT; c.alignment = LEFT; c.border = BORDER
             if ri % 2 == 0:
                 c.fill = _alt_fill
 
@@ -932,6 +935,269 @@ def _auto_row_height(ws, col_widths: dict, content_cols: set = None,
                 lines += max(1, ceil(len(part) / max(eff_w, 1)))
             max_lines = max(max_lines, lines)
         ws.row_dimensions[row[0].row].height = max(min_h, max_lines * line_h)
+
+
+# ── Excel sub-builders ───────────────────────────────────────────────────────
+
+def _build_test_sheet(wb, test_rows_dedup: list, log):
+    """
+    Append Test Sheet to wb.
+    test_rows_dedup: list of (lang_str, page, module, en, trans_or_None, fill_hex)
+    """
+    _lang_counts  = Counter(_tr[0] for _tr in test_rows_dedup)
+    _n_langs      = len(_lang_counts)
+    _MAX_T        = 6
+    _n_testers    = max(2, min(_MAX_T, max(1, _n_langs // 2)))
+    _langs_by_cnt = [_l for _l, _ in sorted(_lang_counts.items(), key=lambda x: -x[1])]
+
+    def _greedy(n):
+        _h = [(0, i + 1) for i in range(min(n, _n_langs))]
+        heapq.heapify(_h)
+        _res = {}
+        for _l in _langs_by_cnt:
+            _tot, _ti = heapq.heappop(_h)
+            _res[_l] = _ti
+            heapq.heappush(_h, (_tot + _lang_counts[_l], _ti))
+        return _res
+    _precomp = {_n: _greedy(_n) for _n in range(2, _MAX_T + 1)}
+
+    _CFG_COL = 12; _NAME_COL = 13; _ASGN_LANG = 15; _ASGN_START = 16
+
+    ts = wb.create_sheet("Test Sheet")
+    TS_TR_FILL   = PatternFill("solid", fgColor="D9EAD3")
+    TS_TR_FONT   = Font(bold=True, color="000000", name="Microsoft JhengHei UI", size=10)
+    TS_EDIT_FILL = PatternFill("solid", fgColor="FFF9C4")
+    TS_CFG_FILL  = PatternFill("solid", fgColor="302B63")
+    TS_SUM_FILL  = PatternFill("solid", fgColor="F5F5F5")
+    TS_TTL_FILL  = PatternFill("solid", fgColor="4A4580")
+    TS_SRV_FILL  = PatternFill("solid", fgColor="FFF3CD")
+    _GRP_FILLS   = [PatternFill("solid", fgColor="FFE3F2FD"),
+                    PatternFill("solid", fgColor="FFFFFFFF")]
+
+    _name_rng = f"$M$3:$M${2 + _MAX_T}"
+    _lang_rng = f"$O$2:$O${1 + _n_langs}"
+    _data_rng = f"$P$2:$T${1 + _n_langs}"
+
+    for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
+        _c = ts.cell(row=1, column=_ci, value=_h)
+        _c.alignment = CENTER; _c.border = BORDER
+        if _h in ("Tester", "Test result"):
+            _c.fill = TS_TR_FILL; _c.font = TS_TR_FONT
+        else:
+            _c.fill = HEADER; _c.font = H_FONT
+    ts.row_dimensions[1].height = 32
+
+    _n_data = len(test_rows_dedup)
+    _prev_lang = None; _grp_idx = -1
+
+    for _r, (_lang, _page, _module, _en, _trans, _fill_hex) in enumerate(test_rows_dedup, 2):
+        if _lang != _prev_lang:
+            _grp_idx += 1; _prev_lang = _lang
+        _row_bg    = _GRP_FILLS[_grp_idx % 2]
+        _is_server = (_trans is None)
+
+        _LANG_ALIGN = Alignment(horizontal="left", vertical="center", wrap_text=False)
+        for _ci, _v in enumerate([_lang, _page, _module, _en, _trans, None, None], 1):
+            _c = ts.cell(row=_r, column=_ci, value=_v)
+            _c.font = Font(name="Microsoft JhengHei UI", size=10)
+            _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
+            _c.border = BORDER
+            if _ci == 5:
+                _c.fill = TS_SRV_FILL if _is_server else PatternFill("solid", fgColor="FF" + _fill_hex)
+            else:
+                _c.fill = _row_bg
+
+        _tc = ts.cell(row=_r, column=6)
+        _tc.value = (f'=IFERROR(INDEX({_name_rng},'
+                     f'INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),'
+                     f'MAX(1,MIN(5,$M$2-1)))),"")')
+        _tc.font = Font(name="Microsoft JhengHei UI", size=10)
+        _tc.alignment = CENTER; _tc.border = BORDER; _tc.fill = _row_bg
+        ts.row_dimensions[_r].height = 18
+
+    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 18, 20]):
+        ts.column_dimensions[_col].width = _w
+    ts.freeze_panes = "A2"
+    ts.auto_filter.ref = f"A1:G{_n_data + 1}"
+
+    for _col, _h in zip([9, 10], ["Language", "# Strings"]):
+        _c = ts.cell(row=1, column=_col, value=_h)
+        _c.fill = HEADER; _c.font = H_FONT; _c.alignment = CENTER
+    for _i, (_l, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
+        _lc = ts.cell(row=_i, column=9, value=_l)
+        _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
+        _nc = ts.cell(row=_i, column=10, value=_cnt)
+        _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = TS_SUM_FILL; _nc.alignment = CENTER
+    _sum_ttl_r = 2 + _n_langs
+    for _col, _v in [(9, "Total"), (10, _n_data)]:
+        _tc2 = ts.cell(row=_sum_ttl_r, column=_col, value=_v)
+        _tc2.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
+        _tc2.fill = TS_TTL_FILL; _tc2.alignment = CENTER
+
+    _cfg_hdr = ts.cell(row=1, column=_CFG_COL, value="Tester 設定")
+    _cfg_hdr.fill = TS_CFG_FILL; _cfg_hdr.font = H_FONT; _cfg_hdr.alignment = CENTER
+    ts.merge_cells(start_row=1, start_column=_CFG_COL, end_row=1, end_column=_NAME_COL)
+
+    _lbl_font = Font(name="Microsoft JhengHei UI", size=10)
+    ts.cell(row=2, column=_CFG_COL, value="人數 / # Testers").font = _lbl_font
+    _cnt_v = ts.cell(row=2, column=_NAME_COL, value=_n_testers)
+    _cnt_v.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
+    _cnt_v.fill = TS_EDIT_FILL; _cnt_v.alignment = CENTER
+
+    for _ti in range(1, _MAX_T + 1):
+        _rr = 2 + _ti
+        ts.cell(row=_rr, column=_CFG_COL, value=f"Tester {_ti}").font = _lbl_font
+        _nm = ts.cell(row=_rr, column=_NAME_COL, value=f"Tester {_ti}")
+        _nm.fill = TS_EDIT_FILL
+        _nm.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nm.alignment = CENTER
+
+    _note_r = 3 + _MAX_T
+    _note = ts.cell(row=_note_r, column=_CFG_COL,
+                    value="改 M2（2–6）或姓名，Tester 欄自動更新")
+    _note.font = Font(name="Microsoft JhengHei UI", size=8, color="888888", italic=True)
+    ts.merge_cells(start_row=_note_r, start_column=_CFG_COL,
+                   end_row=_note_r,   end_column=_NAME_COL)
+
+    _ah_font = Font(name="Microsoft JhengHei UI", size=9, bold=True, color="FFFFFF")
+    ts.cell(row=1, column=_ASGN_LANG, value="Language").fill = TS_CFG_FILL
+    ts.cell(row=1, column=_ASGN_LANG).font      = _ah_font
+    ts.cell(row=1, column=_ASGN_LANG).alignment = CENTER
+    for _ni, _n in enumerate(range(2, _MAX_T + 1)):
+        _hc = ts.cell(row=1, column=_ASGN_START + _ni, value=f"n={_n}")
+        _hc.fill = TS_CFG_FILL; _hc.font = _ah_font; _hc.alignment = CENTER
+
+    for _ai, _l in enumerate(_langs_by_cnt, 2):
+        _lc = ts.cell(row=_ai, column=_ASGN_LANG, value=_l)
+        _lc.font = Font(name="Microsoft JhengHei UI", size=9); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
+        for _ni, _n in enumerate(range(2, _MAX_T + 1)):
+            _vc = ts.cell(row=_ai, column=_ASGN_START + _ni, value=_precomp[_n].get(_l, 0))
+            _vc.font = Font(name="Microsoft JhengHei UI", size=9, bold=True)
+            _vc.fill = TS_SUM_FILL; _vc.alignment = CENTER
+
+    ts.column_dimensions["H"].width = 4
+    ts.column_dimensions["I"].width = 22
+    ts.column_dimensions["J"].width = 12
+    ts.column_dimensions["K"].width = 4
+    ts.column_dimensions[get_column_letter(_CFG_COL)].width  = 22
+    ts.column_dimensions[get_column_letter(_NAME_COL)].width = 18
+    ts.column_dimensions["N"].width = 4
+    ts.column_dimensions[get_column_letter(_ASGN_LANG)].width = 22
+    for _ni in range(_MAX_T - 1):
+        ts.column_dimensions[get_column_letter(_ASGN_START + _ni)].width = 7
+
+    log(f"🧪 Test Sheet: {_n_data} 筆（{_n_langs} 個語言，預設 {_n_testers} 位 Tester，支援 2–{_MAX_T} 人）")
+
+
+def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
+                       lang_label: dict, ignore_set):
+    """Append 翻譯問題報告 sheet to wb. Returns (n_groups, n_issues)."""
+    rpt = wb.create_sheet("翻譯問題報告")
+    RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
+
+    for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
+        c = rpt.cell(row=1, column=ci, value=h)
+        c.fill = RPT_H_FILL
+        c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
+        c.alignment, c.border = CENTER, BORDER
+    rpt.row_dimensions[1].height = 24
+
+    ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740"}
+    rpt_groups: dict[tuple, list] = OrderedDict()
+
+    for rd in rows_data:
+        if rd["not_found"]: continue
+        trans             = rd["trans"]
+        module            = rd["module"]
+        enu_val           = rd.get("enu_val", "")
+        key_name          = rd.get("key_name", "")
+        key_missing_langs = rd.get("key_missing_langs", [])
+
+        for lang in sorted_langs:
+            if lang == "en": continue
+            val   = trans.get(lang, "")
+            label = lang_label.get(lang, lang)
+
+            if not val or is_garbled(val):
+                issue = "未翻譯 / 空白"; keys_str = key_name
+            elif enu_val and val.strip() == enu_val.strip():
+                if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
+                    continue
+                issue = "與英文翻譯檔相同"; keys_str = key_name
+            elif lang in key_missing_langs:
+                issue = "未翻譯 / 空白"; keys_str = key_name
+            else:
+                continue
+
+            grp_key = (module, enu_val, issue, keys_str)
+            if grp_key not in rpt_groups:
+                rpt_groups[grp_key] = []
+            if label not in rpt_groups[grp_key]:
+                rpt_groups[grp_key].append(label)
+
+    sorted_groups = sorted(rpt_groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
+
+    prev_module = None
+    for ri, ((module, enu_val, issue, keys_str), langs_list) in enumerate(sorted_groups, 2):
+        is_new_mod = (module != prev_module); prev_module = module
+        row_border = Border(
+            left=thin, right=thin,
+            top=Side(style="medium" if is_new_mod else "thin",
+                     color="C0392B" if is_new_mod else "DDDDDD"),
+            bottom=thin)
+        row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
+        rpt.row_dimensions[ri].height = row_h
+
+        for ci, v in enumerate([module, enu_val, keys_str, ", ".join(langs_list), issue], 1):
+            c = rpt.cell(row=ri, column=ci, value=v or None)
+            c.border = row_border
+            if ci == 5:
+                c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
+                c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
+                c.alignment = LEFT
+            elif ci == 3:
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
+                c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            else:
+                c.font = Font(name="Microsoft JhengHei UI", size=10)
+                c.alignment = LEFT
+
+    rpt.column_dimensions["A"].width = 40
+    rpt.column_dimensions["B"].width = 44
+    rpt.column_dimensions["C"].width = 36
+    rpt.column_dimensions["D"].width = 32
+    rpt.column_dimensions["E"].width = 22
+    rpt.freeze_panes = "A2"
+    _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+    return len(sorted_groups), sum(len(v) for v in rpt_groups.values())
+
+
+def _build_legend_sheet(wb):
+    """Append 說明 sheet (colour legend + lang code table) to wb."""
+    ls = wb.create_sheet("說明")
+    for ri, (a, b) in enumerate([
+        ("色彩說明", ""),
+        ("  黃色底", "該語言在此 module 翻譯中字串最長（唯一最長才標示）"),
+        ("  紅色底", "未翻譯、空白、亂碼、或翻譯與英文相同"),
+        ("  橘色字", "模糊比對（Excel 數字對應翻譯檔變數，hover 看原始字串）"),
+        ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
+        ("", ""),
+        ("翻譯問題報告色彩", ""),
+        ("  紅底", "未翻譯 / 空白"),
+        ("  黃底", "與英文翻譯檔相同（ENU）"),
+        ("", ""), ("語言代碼", "語言名稱"),
+    ] + list(LANG_NAMES.items()), 1):
+        ca = ls.cell(row=ri, column=1, value=a)
+        cb = ls.cell(row=ri, column=2, value=b)
+        bold = ri in (1, 7, 12)
+        ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
+        cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
+        if ri == 2:  ca.fill = YELLOW
+        if ri == 3:  ca.fill = RED
+        if ri == 8:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
+        if ri == 9:  ca.fill = PatternFill("solid", fgColor="FFAB40")
+        if ri == 10: ca.fill = PatternFill("solid", fgColor="FFD740")
+    ls.column_dimensions["A"].width = 22
+    ls.column_dimensions["B"].width = 55
 
 
 # ── Excel generator ───────────────────────────────────────────────────────────
@@ -1195,7 +1461,6 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {"C"})
 
     # ── Sheet 2: Test Sheet ───────────────────────────────────────────────────
-    # Dedup: yellow rows → (lang, trans); server rows → (lang, en)
     seen_test: set = set()
     test_rows_dedup: list = []
     for _tr in test_rows:
@@ -1204,291 +1469,14 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             seen_test.add(_key)
             test_rows_dedup.append(_tr)
     test_rows_dedup.sort(key=lambda x: x[0])
-
-    from collections import Counter as _Counter
-    import heapq as _heapq
-    _lang_counts  = _Counter(_tr[0] for _tr in test_rows_dedup)
-    _n_langs      = len(_lang_counts)
-    _MAX_T        = 6    # max supported testers
-    _n_testers    = max(2, min(_MAX_T, max(1, _n_langs // 2)))
-    # Sort languages by string count desc — heaviest langs distributed first
-    _langs_by_cnt = [_l for _l, _ in sorted(_lang_counts.items(), key=lambda x: -x[1])]
-
-    # Greedy bin-packing for each n in 2..MAX_T
-    # Result: _precomp[n][lang] = tester_number (1-indexed)
-    def _greedy(n):
-        _h = [(0, i + 1) for i in range(min(n, _n_langs))]
-        _heapq.heapify(_h)
-        _res = {}
-        for _l in _langs_by_cnt:
-            _tot, _ti = _heapq.heappop(_h)
-            _res[_l] = _ti
-            _heapq.heappush(_h, (_tot + _lang_counts[_l], _ti))
-        return _res
-    _precomp = {_n: _greedy(_n) for _n in range(2, _MAX_T + 1)}
-
-    # Column layout:
-    #  A–G  main table   H spacer   I–J summary   K spacer
-    #  L–M  config (labels / editable name cells)  N spacer
-    #  O    lang (sorted by count desc)
-    #  P–U  greedy tester# for n=2,3,4,5,6  (5 cols; U = col 21)
-    _CFG_COL    = 12   # L
-    _NAME_COL   = 13   # M
-    _ASGN_LANG  = 15   # O
-    _ASGN_START = 16   # P = n=2 … T = n=6
-
-    ts = wb.create_sheet("Test Sheet")
-    TS_TR_FILL   = PatternFill("solid", fgColor="D9EAD3")
-    TS_TR_FONT   = Font(bold=True, color="000000", name="Microsoft JhengHei UI", size=10)
-    TS_EDIT_FILL = PatternFill("solid", fgColor="FFF9C4")
-    TS_CFG_FILL  = PatternFill("solid", fgColor="302B63")
-    TS_SUM_FILL  = PatternFill("solid", fgColor="F5F5F5")
-    TS_TTL_FILL  = PatternFill("solid", fgColor="4A4580")
-    TS_SRV_FILL  = PatternFill("solid", fgColor="FFF3CD")
-    _GRP_FILLS   = [PatternFill("solid", fgColor="FFE3F2FD"),
-                    PatternFill("solid", fgColor="FFFFFFFF")]
-
-    # ranges used by formula (fixed; always covers max possible rows)
-    _name_rng = f"$M$3:$M${2 + _MAX_T}"           # M3:M8
-    _lang_rng = f"$O$2:$O${1 + _n_langs}"
-    _data_rng = f"$P$2:$T${1 + _n_langs}"          # 5 precomputed cols
-
-    # ── Header row ──
-    for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
-        _c = ts.cell(row=1, column=_ci, value=_h)
-        _c.alignment = CENTER; _c.border = BORDER
-        if _h in ("Tester", "Test result"):
-            _c.fill = TS_TR_FILL; _c.font = TS_TR_FONT
-        else:
-            _c.fill = HEADER; _c.font = H_FONT
-    ts.row_dimensions[1].height = 32
-
-    # ── Data rows (alternating bg per language group) ──
-    _n_data    = len(test_rows_dedup)
-    _prev_lang = None
-    _grp_idx   = -1
-
-    for _r, (_lang, _page, _module, _en, _trans, _fill_hex) in enumerate(test_rows_dedup, 2):
-        if _lang != _prev_lang:
-            _grp_idx  += 1
-            _prev_lang = _lang
-        _row_bg    = _GRP_FILLS[_grp_idx % 2]
-        _is_server = (_trans is None)
-
-        _LANG_ALIGN = Alignment(horizontal="left", vertical="center", wrap_text=False)
-        for _ci, _v in enumerate([_lang, _page, _module, _en, _trans, None, None], 1):
-            _c = ts.cell(row=_r, column=_ci, value=_v)
-            _c.font = Font(name="Microsoft JhengHei UI", size=10)
-            _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
-            _c.border = BORDER
-            if _ci == 5:
-                _c.fill = TS_SRV_FILL if _is_server else PatternFill("solid", fgColor="FF" + _fill_hex)
-            else:
-                _c.fill = _row_bg
-
-        # Tester col — INDEX into precomputed table, column selected by M2
-        # MAX(1,MIN(5,$M$2-1)): M2=2→col1(P n=2) … M2=6→col5(T n=6)
-        _tc = ts.cell(row=_r, column=6)
-        _tc.value = (f'=IFERROR(INDEX({_name_rng},'
-                     f'INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),'
-                     f'MAX(1,MIN(5,$M$2-1)))),"")')
-        _tc.font = Font(name="Microsoft JhengHei UI", size=10)
-        _tc.alignment = CENTER; _tc.border = BORDER; _tc.fill = _row_bg
-        ts.row_dimensions[_r].height = 18
-
-    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 18, 20]):
-        ts.column_dimensions[_col].width = _w
-    ts.freeze_panes = "A2"
-    ts.auto_filter.ref = f"A1:G{_n_data + 1}"
-
-    # ── Summary  cols I–J ──
-    for _col, _h in zip([9, 10], ["Language", "# Strings"]):
-        _c = ts.cell(row=1, column=_col, value=_h)
-        _c.fill = HEADER; _c.font = H_FONT; _c.alignment = CENTER
-    for _i, (_l, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
-        _lc = ts.cell(row=_i, column=9, value=_l)
-        _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
-        _nc = ts.cell(row=_i, column=10, value=_cnt)
-        _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = TS_SUM_FILL; _nc.alignment = CENTER
-    _sum_ttl_r = 2 + _n_langs
-    for _col, _v in [(9, "Total"), (10, _n_data)]:
-        _tc2 = ts.cell(row=_sum_ttl_r, column=_col, value=_v)
-        _tc2.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
-        _tc2.fill = TS_TTL_FILL; _tc2.alignment = CENTER
-
-    # ── Tester Config  cols L–M (always 6 slots) ──
-    _cfg_hdr = ts.cell(row=1, column=_CFG_COL, value="Tester 設定")
-    _cfg_hdr.fill = TS_CFG_FILL; _cfg_hdr.font = H_FONT; _cfg_hdr.alignment = CENTER
-    ts.merge_cells(start_row=1, start_column=_CFG_COL, end_row=1, end_column=_NAME_COL)
-
-    _lbl_font = Font(name="Microsoft JhengHei UI", size=10)
-    ts.cell(row=2, column=_CFG_COL, value="人數 / # Testers").font = _lbl_font
-    _cnt_v = ts.cell(row=2, column=_NAME_COL, value=_n_testers)
-    _cnt_v.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
-    _cnt_v.fill = TS_EDIT_FILL; _cnt_v.alignment = CENTER
-
-    for _ti in range(1, _MAX_T + 1):   # always show all 6 slots
-        _rr = 2 + _ti
-        ts.cell(row=_rr, column=_CFG_COL, value=f"Tester {_ti}").font = _lbl_font
-        _nm = ts.cell(row=_rr, column=_NAME_COL, value=f"Tester {_ti}")
-        _nm.fill = TS_EDIT_FILL
-        _nm.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nm.alignment = CENTER
-
-    _note_r = 3 + _MAX_T
-    _note = ts.cell(row=_note_r, column=_CFG_COL,
-                    value="改 M2（2–6）或姓名，Tester 欄自動更新")
-    _note.font = Font(name="Microsoft JhengHei UI", size=8, color="888888", italic=True)
-    ts.merge_cells(start_row=_note_r, start_column=_CFG_COL,
-                   end_row=_note_r,   end_column=_NAME_COL)
-
-    # ── Assignment table  col O (lang) + cols P–T (greedy result for n=2..6) ──
-    _ah_font = Font(name="Microsoft JhengHei UI", size=9, bold=True, color="FFFFFF")
-    ts.cell(row=1, column=_ASGN_LANG, value="Language").fill = TS_CFG_FILL
-    ts.cell(row=1, column=_ASGN_LANG).font      = _ah_font
-    ts.cell(row=1, column=_ASGN_LANG).alignment = CENTER
-    for _ni, _n in enumerate(range(2, _MAX_T + 1)):
-        _hc = ts.cell(row=1, column=_ASGN_START + _ni, value=f"n={_n}")
-        _hc.fill = TS_CFG_FILL; _hc.font = _ah_font; _hc.alignment = CENTER
-
-    for _ai, _l in enumerate(_langs_by_cnt, 2):
-        _lc = ts.cell(row=_ai, column=_ASGN_LANG, value=_l)
-        _lc.font = Font(name="Microsoft JhengHei UI", size=9); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
-        for _ni, _n in enumerate(range(2, _MAX_T + 1)):
-            _vc = ts.cell(row=_ai, column=_ASGN_START + _ni, value=_precomp[_n].get(_l, 0))
-            _vc.font = Font(name="Microsoft JhengHei UI", size=9, bold=True)
-            _vc.fill = TS_SUM_FILL; _vc.alignment = CENTER
-
-    # Column widths
-    ts.column_dimensions["H"].width = 4
-    ts.column_dimensions["I"].width = 22
-    ts.column_dimensions["J"].width = 12
-    ts.column_dimensions["K"].width = 4
-    ts.column_dimensions[get_column_letter(_CFG_COL)].width  = 22
-    ts.column_dimensions[get_column_letter(_NAME_COL)].width = 18
-    ts.column_dimensions["N"].width = 4
-    ts.column_dimensions[get_column_letter(_ASGN_LANG)].width = 22
-    for _ni in range(_MAX_T - 1):   # cols P–T, 5 cols
-        ts.column_dimensions[get_column_letter(_ASGN_START + _ni)].width = 7
-
-    log(f"🧪 Test Sheet: {_n_data} 筆（{_n_langs} 個語言，預設 {_n_testers} 位 Tester，支援 2–{_MAX_T} 人）")
+    _build_test_sheet(wb, test_rows_dedup, log)
 
     # ── Sheet 3: 翻譯問題報告 ────────────────────────────────────────────────
-    rpt = wb.create_sheet("翻譯問題報告")
-    RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
-
-    for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
-        c = rpt.cell(row=1, column=ci, value=h)
-        c.fill = RPT_H_FILL
-        c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
-        c.alignment, c.border = CENTER, BORDER
-    rpt.row_dimensions[1].height = 24
-
-    ISSUE_COLORS = {
-        "未翻譯 / 空白":    "FF6B6B",
-        "與英文翻譯檔相同": "FFD740",
-    }
-    rpt_groups: dict[tuple, list] = OrderedDict()
-
-    for rd in rows_data:
-        if rd["not_found"]: continue
-        trans             = rd["trans"]
-        module            = rd["module"]
-        enu_val           = rd.get("enu_val", "")
-        key_name          = rd.get("key_name", "")
-        key_missing_langs = rd.get("key_missing_langs", [])
-
-        for lang in sorted_langs:
-            if lang == "en": continue
-            val   = trans.get(lang, "")
-            label = lang_label.get(lang, lang)
-
-            if not val or is_garbled(val):
-                issue    = "未翻譯 / 空白"
-                keys_str = key_name
-            elif enu_val and val.strip() == enu_val.strip():
-                if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
-                    continue   # intentional same-as-English → PASS
-                issue    = "與英文翻譯檔相同"
-                keys_str = key_name
-            elif lang in key_missing_langs:
-                issue    = "未翻譯 / 空白"
-                keys_str = key_name
-            else:
-                continue
-
-            grp_key = (module, enu_val, issue, keys_str)
-            if grp_key not in rpt_groups:
-                rpt_groups[grp_key] = []
-            if label not in rpt_groups[grp_key]:
-                rpt_groups[grp_key].append(label)
-
-    sorted_groups = sorted(rpt_groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
-
-    prev_module = None
-    for ri, ((module, enu_val, issue, keys_str), langs_list) in enumerate(sorted_groups, 2):
-        is_new_mod = (module != prev_module)
-        prev_module = module
-        row_border = Border(
-            left=thin, right=thin,
-            top=Side(style="medium" if is_new_mod else "thin",
-                     color="C0392B" if is_new_mod else "DDDDDD"),
-            bottom=thin
-        )
-        langs_str = ", ".join(langs_list)
-        row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
-        rpt.row_dimensions[ri].height = row_h
-
-        for ci, v in enumerate([module, enu_val, keys_str, langs_str, issue], 1):
-            c = rpt.cell(row=ri, column=ci, value=v or None)
-            c.border = row_border
-            if ci == 5:
-                color = ISSUE_COLORS.get(issue, "FFFFFF")
-                c.fill = PatternFill("solid", fgColor=color)
-                c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
-                c.alignment = LEFT
-            elif ci == 3:   # Keys column
-                c.font = Font(name="Microsoft JhengHei UI", size=10)
-                c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-            else:
-                c.font = Font(name="Microsoft JhengHei UI", size=10)
-                c.alignment = LEFT
-                c.font = Font(name="Microsoft JhengHei UI", size=10)
-
-    rpt.column_dimensions["A"].width = 40   # Module
-    rpt.column_dimensions["B"].width = 44
-    rpt.column_dimensions["C"].width = 36   # Keys
-    rpt.column_dimensions["D"].width = 32   # Languages
-    rpt.column_dimensions["E"].width = 22   # Issue type
-    rpt.freeze_panes = "A2"
-    _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
-    log(f"📋 翻譯問題報告: {len(sorted_groups)} 筆（{sum(len(v) for v in rpt_groups.values())} 個問題）")
+    n_groups, n_issues = _build_issue_sheet(wb, rows_data, sorted_langs, lang_label, ignore_set)
+    log(f"📋 翻譯問題報告: {n_groups} 筆（{n_issues} 個問題）")
 
     # ── Sheet 4: 說明 ─────────────────────────────────────────────────────────
-    ls = wb.create_sheet("說明")
-    for ri, (a, b) in enumerate([
-        ("色彩說明", ""),
-        ("  黃色底", "該語言在此 module 翻譯中字串最長（唯一最長才標示）"),
-        ("  紅色底", "未翻譯、空白、亂碼、或翻譯與英文相同"),
-        ("  橘色字", "模糊比對（Excel 數字對應翻譯檔變數，hover 看原始字串）"),
-        ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
-        ("", ""),
-        ("翻譯問題報告色彩", ""),
-        ("  紅底", "未翻譯 / 空白"),
-        ("  黃底", "與英文翻譯檔相同（ENU）"),
-        ("", ""), ("語言代碼", "語言名稱"),
-    ] + list(LANG_NAMES.items()), 1):
-        ca = ls.cell(row=ri, column=1, value=a)
-        cb = ls.cell(row=ri, column=2, value=b)
-        bold = ri in (1, 7, 12)
-        ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
-        cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
-        if ri == 2:  ca.fill = YELLOW
-        if ri == 3:  ca.fill = RED
-        if ri == 8:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
-        if ri == 9:  ca.fill = PatternFill("solid", fgColor="FFAB40")
-        if ri == 10: ca.fill = PatternFill("solid", fgColor="FFD740")
-    ls.column_dimensions["A"].width = 22
-    ls.column_dimensions["B"].width = 55
+    _build_legend_sheet(wb)
 
     wb.save(str(output_xlsx))
     log(f"✅ 輸出完成: {output_xlsx.name}")
@@ -2502,7 +2490,8 @@ class App(tk.Tk):
         if not self._zip_path:
             messagebox.showwarning("缺少檔案", "請選取新版 Zip 檔"); return
         if not self._diff_out_path:
-            default = self._zip_path.parent / "new_strings.xlsx"
+            _stem = re.sub(r'[^\w\-]', '_', self._zip_path.stem)[:25]
+            default = self._zip_path.parent / f"new_strings_{_stem}.xlsx"
             self._diff_out_path = default
             self._diff_out_var.set(self._fmt_name(default.name))
             self._save_app_paths()
@@ -2515,14 +2504,7 @@ class App(tk.Tk):
             self._diff_out_var.set(self._fmt_name(resolved.name))
             self._save_app_paths()
 
-        self._log_main("─" * 40)
-        self._log_main(f"🆚 比對新字串")
-        self._log_main(f"   舊版: {self._zip_old_path.name}")
-        self._log_main(f"   新版: {self._zip_path.name}")
-
-        cancel = threading.Event()
-        self._cancel_event = cancel
-
+        self._cancel_event.clear()
         self._diff_run_btn.configure(state="disabled")
         self._diff_run_btn.pack_forget()
         self._cancel_btn.pack(side="left")
@@ -2533,22 +2515,34 @@ class App(tk.Tk):
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
 
+        zip_old_path = self._zip_old_path
+        zip_new_path = self._zip_path
+        out_path     = self._diff_out_path
+        cancel       = self._cancel_event
+
         def _task():
             try:
-                compare_zips(
-                    self._zip_old_path, self._zip_path,
-                    self._diff_out_path, self._log_main
-                )
-                out_path = self._diff_out_path
+                self._log(f"🆚 比對新字串")
+                self._log(f"   舊版: {zip_old_path.name}")
+                self._log(f"   新版: {zip_new_path.name}")
+                old_index, _ = self._load_index(zip_old_path)
+                if cancel.is_set():
+                    self._log("⚠️  已取消"); return
+                new_index, _ = self._load_index(zip_new_path)
+                if cancel.is_set():
+                    self._log("⚠️  已取消"); return
+                compare_zips(old_index, new_index, out_path, self._log, cancel)
+                if cancel.is_set(): return
+                self._log(f"\n🎉 完成！已儲存至:\n   {out_path}")
                 if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
-                    import subprocess, os
+                    import subprocess
                     if sys.platform == "win32":    os.startfile(str(out_path))
                     elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
                     else:                          subprocess.Popen(["xdg-open", str(out_path)])
             except Exception as e:
                 import traceback
-                self.after(0, self._log_main, f"❌ 錯誤: {e}", "err")
-                self.after(0, self._log_main, traceback.format_exc(), "err")
+                self._log(f"❌ 錯誤: {e}", "err")
+                self._log(traceback.format_exc(), "err")
                 messagebox.showerror("錯誤", str(e))
             finally:
                 self.after(0, self._finish_run, self._diff_run_btn)
