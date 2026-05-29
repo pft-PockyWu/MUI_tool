@@ -15,13 +15,27 @@ APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v1.9
+────────────────────────────────────────
+新功能
+  • 報告新增「Test Sheet」工作表：
+    → 只列有黃色標記（最長字串）的語言與字串，相同翻譯去重
+    → 查無字串（Server string）自動展開成每語言一列（amber 底色）
+    → 語言群組交替藍 / 白底色，視覺上易區分語言切換
+    → Tester 自動分配：Greedy bin-packing 預算 n=2~6 人最佳分配
+      改 M2 人數 → Tester 欄自動切換；改 M 欄姓名 → 即時更新
+    → 欄位：Language / Page / Module / EN (Base) / Translation / Tester / Test result
+    → 右側統計表顯示每語言字串數 + Total，支援 Auto Filter
+  • YCP 新增 7 種語言：UKR / BUL / SWE / HRV / HUN / DAN / GRN
+    → YCP 語言總數 20 → 27
+
+Bug 修正
+  • YCP 波蘭語代碼 PLO 修正為 POL
+
+────────────────────────────────────────
 v1.8
 ────────────────────────────────────────
 新功能
-  • 產生的報告新增「Test Sheet」：
-    → 只列有黃色標記（最長字串）的語言與字串，相同翻譯去重
-    → 欄位：Language / Page / Module / EN (Base) / Translation / Tester / Test result
-    → 右側統計表顯示每語言字串數 + Total，支援 Auto Filter
   • 快速查詢 & Excel 模式皆支援 * 萬用字元
     → 輸入 Premium plan* 自動展開所有開頭符合的字串，各自輸出翻譯結果
     → Excel 模式：一列萬用字元展開為多列，方便批次比對
