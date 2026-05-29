@@ -227,9 +227,16 @@ APP_CONFIGS: dict[str, dict | None] = {
         "MSL": "ms",
         "NLD": "nl",
         "ELL": "el",
-        "PLO": "pl",
+        "POL": "pl",
         "RON": "ro",
         "ARA": "ar",
+        "UKR": "uk",
+        "BUL": "bg",
+        "SWE": "sv",
+        "HRV": "hr",
+        "HUN": "hu",
+        "DAN": "da",
+        "GRN": "gn",
     },
 
     "YCVB": {
@@ -268,6 +275,7 @@ LANG_NAMES = {
     "sv": "瑞典語",         "da": "丹麥語",          "hu": "匈牙利語",
     "el": "希臘語",         "uk": "烏克蘭語",        "bg": "保加利亞語",
     "hr": "克羅埃西亞語",   "ro": "羅馬尼亞語",      "cs": "捷克語",
+    "gn": "瓜拉尼語",
 }
 LANG_PRIORITY = ["en", "zh-Hant", "zh-Hans", "zh", "ja", "ko"]
 
