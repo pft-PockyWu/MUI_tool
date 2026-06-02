@@ -25,6 +25,10 @@ v2.0
     → 四個模式路徑一致：選檔後自動記憶、切換 App 自動 reset/restore、
       輸出檔已存在跳出四選一彈窗（與其他模式行為完全同步）
 
+新功能
+  • Test Sheet 新增「自定」欄：manager 可對特定語言從下拉選單指定 Tester
+    → 下拉內容自動對應 M3:M8 姓名，有填則覆蓋自動分配，空白則繼續用 Greedy
+
 UI
   • 模式按鈕改為 2×2 等寬等高 Grid 排版，各按鈕間保留 3px 間距
   • 比對新字串模式右側改為功能說明卡，不再顯示無關的快速查詢面板
@@ -177,6 +181,7 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
     import pandas as pd
 except ImportError:
     import subprocess, sys
@@ -974,9 +979,14 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
     _GRP_FILLS   = [PatternFill("solid", fgColor="FFE3F2FD"),
                     PatternFill("solid", fgColor="FFFFFFFF")]
 
-    _name_rng = f"$M$3:$M${2 + _MAX_T}"
-    _lang_rng = f"$O$2:$O${1 + _n_langs}"
-    _data_rng = f"$P$2:$T${1 + _n_langs}"
+    _name_rng   = f"$M$3:$M${2 + _MAX_T}"
+    _lang_rng   = f"$O$2:$O${1 + _n_langs}"
+    _data_rng   = f"$P$2:$T${1 + _n_langs}"
+    # Custom override col (U): manager picks a tester name from dropdown;
+    # takes priority over greedy auto-assignment when non-empty.
+    _CUSTOM_COL = _ASGN_START + (_MAX_T - 1)        # col U (= 21)
+    _cust_col_l = get_column_letter(_CUSTOM_COL)     # "U"
+    _custom_rng = f"${_cust_col_l}$2:${_cust_col_l}${1 + _n_langs}"
 
     for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
         _c = ts.cell(row=1, column=_ci, value=_h)
@@ -1008,9 +1018,14 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
                 _c.fill = _row_bg
 
         _tc = ts.cell(row=_r, column=6)
-        _tc.value = (f'=IFERROR(INDEX({_name_rng},'
-                     f'INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),'
-                     f'MAX(1,MIN(5,$M$2-1)))),"")')
+        # Priority: custom name (col U) → greedy auto-assignment
+        _tc.value = (
+            f'=IFERROR('
+            f'IF(INDEX({_custom_rng},MATCH(A{_r},{_lang_rng},0))<>"",'
+            f'INDEX({_custom_rng},MATCH(A{_r},{_lang_rng},0)),'
+            f'INDEX({_name_rng},INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),MAX(1,MIN(5,$M$2-1)))'
+            f')),"")'
+        )
         _tc.font = Font(name="Microsoft JhengHei UI", size=10)
         _tc.alignment = CENTER; _tc.border = BORDER; _tc.fill = _row_bg
         ts.row_dimensions[_r].height = 18
@@ -1053,7 +1068,7 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
 
     _note_r = 3 + _MAX_T
     _note = ts.cell(row=_note_r, column=_CFG_COL,
-                    value="改 M2（2–6）或姓名，Tester 欄自動更新")
+                    value="改 M2（2–6）或姓名可自動更新 ｜ 自定欄直接選名字可覆蓋自動分配")
     _note.font = Font(name="Microsoft JhengHei UI", size=8, color="888888", italic=True)
     ts.merge_cells(start_row=_note_r, start_column=_CFG_COL,
                    end_row=_note_r,   end_column=_NAME_COL)
@@ -1066,6 +1081,16 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
         _hc = ts.cell(row=1, column=_ASGN_START + _ni, value=f"n={_n}")
         _hc.fill = TS_CFG_FILL; _hc.font = _ah_font; _hc.alignment = CENTER
 
+    # Custom override column header
+    _ch = ts.cell(row=1, column=_CUSTOM_COL, value="自定")
+    _ch.fill = TS_EDIT_FILL
+    _ch.font = Font(name="Microsoft JhengHei UI", size=9, bold=True); _ch.alignment = CENTER
+
+    # Dropdown validation: choices = tester names from M3:M8
+    _dv = DataValidation(type="list", formula1=_name_rng,
+                         allow_blank=True, showDropDown=False)
+    ts.add_data_validation(_dv)
+
     for _ai, _l in enumerate(_langs_by_cnt, 2):
         _lc = ts.cell(row=_ai, column=_ASGN_LANG, value=_l)
         _lc.font = Font(name="Microsoft JhengHei UI", size=9); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
@@ -1073,6 +1098,11 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
             _vc = ts.cell(row=_ai, column=_ASGN_START + _ni, value=_precomp[_n].get(_l, 0))
             _vc.font = Font(name="Microsoft JhengHei UI", size=9, bold=True)
             _vc.fill = TS_SUM_FILL; _vc.alignment = CENTER
+        # Custom col: editable cell with dropdown
+        _cc = ts.cell(row=_ai, column=_CUSTOM_COL, value="")
+        _cc.font = Font(name="Microsoft JhengHei UI", size=9)
+        _cc.fill = TS_EDIT_FILL; _cc.alignment = CENTER
+        _dv.add(_cc)
 
     ts.column_dimensions["H"].width = 4
     ts.column_dimensions["I"].width = 22
@@ -1084,6 +1114,7 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
     ts.column_dimensions[get_column_letter(_ASGN_LANG)].width = 22
     for _ni in range(_MAX_T - 1):
         ts.column_dimensions[get_column_letter(_ASGN_START + _ni)].width = 7
+    ts.column_dimensions[_cust_col_l].width = 14   # custom col
 
     log(f"🧪 Test Sheet: {_n_data} 筆（{_n_langs} 個語言，預設 {_n_testers} 位 Tester，支援 2–{_MAX_T} 人）")
 
