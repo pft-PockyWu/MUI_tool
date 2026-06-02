@@ -29,6 +29,9 @@ v2.0
   • Test Sheet 新增「自定」欄：manager 可對特定語言從下拉選單指定 Tester
     → 下拉內容自動對應 M3:M8 姓名，有填則覆蓋自動分配，空白則繼續用 Greedy
 
+修正
+  • YCE 匈牙利語代碼 HUM → HUN（與 YCP 及 ISO 639-2 標準統一）
+
 UI
   • 模式按鈕改為 2×2 等寬等高 Grid 排版，各按鈕間保留 3px 間距
   • 比對新字串模式右側改為功能說明卡，不再顯示無關的快速查詢面板
@@ -239,7 +242,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "MSL": "ms",
         "NLD": "nl",
         "ITA": "it",
-        "HUM": "hu",
+        "HUN": "hu",
         "SWE": "sv",
         "ARA": "ar",
     },
