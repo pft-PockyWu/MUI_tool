@@ -2238,8 +2238,11 @@ class App(tk.Tk):
     def _fmt_name(name: str, n: int = 32) -> str:
         return ("…" + name[-(n - 1):]) if len(name) > n else name
 
-    def _bind_tooltip(self, widget, path_fn):
-        """Show full path as a floating tooltip on hover; hide on leave."""
+    def _bind_tooltip(self, widget, path_fn, anchor_widget=None):
+        """Show full path as a floating tooltip on hover; hide on leave.
+        anchor_widget: widget whose rootx is used for tooltip x-position.
+                       Defaults to widget itself.
+        """
         def _show(e):
             path = path_fn()
             if not path:
@@ -2250,8 +2253,9 @@ class App(tk.Tk):
             tk.Label(tip, text=path, font=("Microsoft JhengHei UI", 9), fg="#cdd6f4",
                      bg="#27273a", padx=10, pady=5).pack()
             tip.update_idletasks()
-            x = widget.winfo_rootx()
-            y = widget.winfo_rooty() + widget.winfo_height() + 2
+            anchor = anchor_widget or widget
+            x = anchor.winfo_rootx()
+            y = anchor.winfo_rooty() + anchor.winfo_height() + 2
             sw = self.winfo_screenwidth()
             if x + tip.winfo_reqwidth() > sw:
                 x = max(0, sw - tip.winfo_reqwidth() - 4)
@@ -2271,10 +2275,12 @@ class App(tk.Tk):
         widget.bind("<Leave>", _hide)
 
     def _bind_row_tooltip(self, row_widgets, path_fn):
-        """Bind tooltip to both the label and filename widget of a file row."""
+        """Bind tooltip to both the label and filename widget of a file row.
+        Tooltip always anchors to lbl (left edge of row) so it appears flush left.
+        """
         lbl, val, _ = row_widgets
         self._bind_tooltip(lbl, path_fn)
-        self._bind_tooltip(val, path_fn)
+        self._bind_tooltip(val, path_fn, anchor_widget=lbl)
 
     def _make_file_row(self, parent, label, var, cmd, row, is_save=False):
         parent.columnconfigure(1, weight=1)   # filename column stretches; button always visible
