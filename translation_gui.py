@@ -2342,10 +2342,15 @@ class App(tk.Tk):
                 if is_web:
                     if self._mode_var.get() == "convert":
                         self._set_mode("excel")   # switch mode first (re-styles all btns)
-                    _conv_btn.configure(state="disabled", bg="#1e1e2e",
-                                        fg="#45475a", cursor="", activebackground="#1e1e2e")
+                    # Use color + no-op command (state="disabled" ignores bg on flat btns)
+                    _conv_btn.configure(
+                        bg="#1e1e2e", fg="#3d3d55", cursor="",
+                        activebackground="#1e1e2e", activeforeground="#3d3d55",
+                        command=lambda: None)
                 else:
-                    _conv_btn.configure(state="normal", cursor="hand2")
+                    _conv_btn.configure(
+                        cursor="hand2",
+                        command=lambda: self._set_mode("convert"))
                     # Re-apply proper coloring via _set_mode
                     self._set_mode(self._mode_var.get())
 
@@ -2484,11 +2489,11 @@ class App(tk.Tk):
             if mode == "excel":
                 self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
             elif mode == "scan":
-                self._scan_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._scan_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             elif mode == "convert":
-                self._convert_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._convert_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             else:  # diff
-                self._diff_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._diff_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
 
     def _clear_ignore(self):
         self._ignore_path = None
