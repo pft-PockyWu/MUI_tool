@@ -10,11 +10,22 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.0.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.1.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
-TOOL_VERSION = "5"   # bump when index structure changes (forces cache rebuild)
+TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.1
+────────────────────────────────────────
+新功能
+  • 新增「Web」App 支援（cosmetic-web-doc JSON 格式）：
+    → 動態偵測 Zip 內語言，無需手動設定
+    → 輸出 Excel 無 Module 欄（Web 翻譯無模組概念）
+    → 支援 Excel 查詢、語言全掃描、比對新字串三個模式
+    → 不支援「轉換 Ignore」模式（Web 無對應掃描報告格式）
+  • 新增 5 種語言：VIE 越南語 / HIN 印地語 / TAM 泰米爾語 / FAR 波斯語 / AFR 南非荷蘭語
+
+────────────────────────────────────────
 v2.0
 ────────────────────────────────────────
 新功能
@@ -296,9 +307,63 @@ APP_CONFIGS: dict[str, dict | None] = {
         "NLD": "nl",
     },
 
+    # Web: dynamic — languages detected from zip at runtime
+    "Web": {},
+
 }
 
 REGIONAL_ALLOWLIST: set = set()
+
+# ── Web locale mapping ────────────────────────────────────────────────────────
+# locale filename stem → internal code  (e.g. "ar_AE" → "ARA")
+_WEB_LOCALE_TO_CODE: dict[str, str] = {
+    "en_US": "ENU",  "zh_TW": "CHT",  "zh_CN": "CHS",  "ja_JP": "JPN",
+    "ko_KR": "KOR",  "ar_AE": "ARA",  "fr_FR": "FRA",  "de_DE": "DEU",
+    "ru_RU": "RUS",  "pt_BR": "PTB",  "id_ID": "IND",  "th_TH": "THA",
+    "tr_TR": "TRK",  "ms_MY": "MSL",  "it_IT": "ITA",  "nl_NL": "NLD",
+    "he_IL": "HEB",  "pl_PL": "POL",  "fil_PH": "FIL", "hu_HU": "HUN",
+    "sv_SE": "SWE",  "el_GR": "ELL",  "ro_RO": "RON",  "uk_UA": "UKR",
+    "bg_BG": "BUL",  "hr_HR": "HRV",  "da_DK": "DAN",  "gn_PY": "GRN",
+    "vi_VN": "VIE",  "hi_IN": "HIN",  "ta_IN": "TAM",  "fa_IR": "FAR",
+    "af_ZA": "AFR",
+}
+# locale filename stem → ISO lang code  (e.g. "ar_AE" → "ar")
+_WEB_LOCALE_TO_LANG: dict[str, str] = {
+    "en_US": "en",      "zh_TW": "zh-Hant", "zh_CN": "zh-Hans", "ja_JP": "ja",
+    "ko_KR": "ko",      "ar_AE": "ar",       "fr_FR": "fr",       "de_DE": "de",
+    "ru_RU": "ru",      "pt_BR": "pt",        "id_ID": "id",       "th_TH": "th",
+    "tr_TR": "tr",      "ms_MY": "ms",        "it_IT": "it",       "nl_NL": "nl",
+    "he_IL": "he",      "pl_PL": "pl",        "fil_PH": "fil",     "hu_HU": "hu",
+    "sv_SE": "sv",      "el_GR": "el",        "ro_RO": "ro",       "uk_UA": "uk",
+    "bg_BG": "bg",      "hr_HR": "hr",        "da_DK": "da",       "gn_PY": "gn",
+    "vi_VN": "vi",      "hi_IN": "hi",        "ta_IN": "ta",       "fa_IR": "fa",
+    "af_ZA": "af",
+}
+
+def _is_web_zip(zip_path: Path) -> bool:
+    """Return True if zip contains top-level en_US.json (web translation format)."""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            return "en_US.json" in zf.namelist()
+    except Exception:
+        return False
+
+def _detect_web_langs_from_zip(zip_path: Path) -> dict:
+    """
+    Fast scan of zip filenames → {internal_code: lang_code} for all detected locales.
+    Does NOT read file contents — used for UI updates only.
+    """
+    result = {}
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = {Path(n).name for n in zf.namelist()}
+        for stem, code in _WEB_LOCALE_TO_CODE.items():
+            if stem == "en_US": continue
+            if stem + ".json" in names:
+                result[code] = _WEB_LOCALE_TO_LANG[stem]
+    except Exception:
+        pass
+    return result
 
 # ── Language metadata ─────────────────────────────────────────────────────────
 LANG_NAMES = {
@@ -314,6 +379,9 @@ LANG_NAMES = {
     "el": "希臘語",         "uk": "烏克蘭語",        "bg": "保加利亞語",
     "hr": "克羅埃西亞語",   "ro": "羅馬尼亞語",      "cs": "捷克語",
     "gn": "瓜拉尼語",
+    "vi": "越南語",   "hi": "印地語",
+    "ta": "泰米爾語", "fa": "波斯語",
+    "af": "南非荷蘭語",
 }
 LANG_PRIORITY = ["en", "zh-Hant", "zh-Hans", "zh", "ja", "ko"]
 
@@ -590,6 +658,65 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
     log(f"✅ 索引完成: {len(projects)} 個 project，{len(lookup)} 個英文字串")
     return lookup, norm_index
 
+# ── Web index builder ─────────────────────────────────────────────────────────
+
+def build_web_index(source: Path, log) -> tuple:
+    """
+    Build index from a web-format Zip (flat {key: value} JSON files per locale).
+    Returns (lookup, norm_index, detected_langs) where:
+      detected_langs = {internal_code: lang_code}  e.g. {"ARA": "ar", "FRA": "fr"}
+    The lookup uses "" as pseudo-module (web has no module concept).
+    """
+    log(f"🔍 掃描 Web 翻譯來源: {source.name}")
+
+    with zipfile.ZipFile(source) as zf:
+        all_names = {Path(n).name: n for n in zf.namelist()}
+        en_data: dict = json.loads(zf.read(all_names["en_US.json"]).decode("utf-8"))
+
+        lang_data: dict = {}   # lang_code → {key: value}
+        detected: dict  = {}   # internal_code → lang_code
+
+        for stem, code in _WEB_LOCALE_TO_CODE.items():
+            if stem == "en_US": continue
+            fname = stem + ".json"
+            if fname not in all_names: continue
+            lc = _WEB_LOCALE_TO_LANG[stem]
+            lang_data[lc] = json.loads(zf.read(all_names[fname]).decode("utf-8"))
+            detected[code] = lc
+
+    # Group keys by EN value (same EN value may map to multiple keys)
+    key_groups: dict[str, list] = {}
+    for key, en_val in en_data.items():
+        if not en_val.strip(): continue
+        translations: dict = {}
+        for lc, kv in lang_data.items():
+            val = kv.get(key, "")
+            if val: translations[lc] = val
+        key_groups.setdefault(en_val, []).append((key, translations))
+
+    lookup: dict = {}
+    for en_val, key_list in key_groups.items():
+        all_langs: set = set()
+        for _, pt in key_list: all_langs.update(pt.keys())
+
+        best: dict = {"en": en_val}
+        for lang in all_langs:
+            for _, pt in key_list:
+                val = pt.get(lang, "")
+                if val: best[lang] = val; break
+
+        best["_all_keys"]    = [k for k, _ in key_list]
+        best["_key_trans"]   = {k: dict(pt) for k, pt in key_list}
+        best["_key_missing"] = {}
+
+        # "" = pseudo-module (no module in web format)
+        lookup.setdefault(en_val, {})[""] = best
+
+    norm_index = {_normalize(k): k for k in lookup}
+    log(f"✅ Web 索引完成: {len(lookup)} 個英文字串，{len(detected)} 個語言")
+    return lookup, norm_index, detected
+
+
 # ── Ignore list loader ────────────────────────────────────────────────────────
 
 def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
@@ -754,7 +881,8 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                          scan_langs: list[str],
                          target_langs: dict | None = None,
                          ignore_set: set = None,
-                         cancel_event=None):
+                         cancel_event=None,
+                         has_module: bool = True):
     """
     Scan ALL strings in the index for selected languages.
     Output: one report sheet grouped by Module.
@@ -804,13 +932,16 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
             else:
                 continue
 
-            grp_key = (module, enu_val, issue, keys_str)
+            grp_key = (module, enu_val, issue, keys_str) if has_module else (enu_val, issue, keys_str)
             if grp_key not in groups:
                 groups[grp_key] = []
             if label not in groups[grp_key]:
                 groups[grp_key].append(label)
 
-    sorted_groups = sorted(groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
+    if has_module:
+        sorted_groups = sorted(groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
+    else:
+        sorted_groups = sorted(groups.items(), key=lambda x: (x[0][1], x[0][0]))
     log(f"📋 發現 {len(sorted_groups)} 筆問題")
 
     ISSUE_COLORS = {
@@ -823,17 +954,25 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     rpt.title = "語言掃描報告"
     RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
 
-    for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
+    _hdrs = (["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"]
+             if has_module else
+             ["ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"])
+    for ci, h in enumerate(_hdrs, 1):
         c = rpt.cell(row=1, column=ci, value=h)
         c.fill = RPT_H_FILL
         c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
         c.alignment, c.border = CENTER, BORDER
     rpt.row_dimensions[1].height = 24
 
-    prev_module = None
-    for ri, ((module, enu_val, issue, keys_str), langs_list) in enumerate(sorted_groups, 2):
-        is_new = (module != prev_module)
-        prev_module = module
+    _prev_grp = None
+    for ri, (grp_key, langs_list) in enumerate(sorted_groups, 2):
+        if has_module:
+            module, enu_val, issue, keys_str = grp_key
+        else:
+            enu_val, issue, keys_str = grp_key
+            module = ""
+        is_new = (grp_key[0] != (_prev_grp[0] if _prev_grp else None))
+        _prev_grp = grp_key
         row_border = Border(
             left=thin, right=thin,
             top=Side(style="medium" if is_new else "thin",
@@ -843,34 +982,47 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
         rpt.row_dimensions[ri].height = row_h
 
-        for ci, v in enumerate([module, enu_val, keys_str, ", ".join(langs_list), issue], 1):
+        _row_vals = ([module, enu_val, keys_str, ", ".join(langs_list), issue]
+                     if has_module else
+                     [enu_val, keys_str, ", ".join(langs_list), issue])
+        _issue_ci = 5 if has_module else 4
+        _key_ci   = 3 if has_module else 2
+        for ci, v in enumerate(_row_vals, 1):
             c = rpt.cell(row=ri, column=ci, value=_xl_safe(v) or None)
             c.border = row_border
-            if ci == 5:
+            if ci == _issue_ci:
                 c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
                 c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
                 c.alignment = LEFT
-            elif ci == 3:
+            elif ci == _key_ci:
                 c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             else:
                 c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = LEFT
 
-    rpt.column_dimensions["A"].width = 40   # Module
-    rpt.column_dimensions["B"].width = 44
-    rpt.column_dimensions["C"].width = 36
-    rpt.column_dimensions["D"].width = 32
-    rpt.column_dimensions["E"].width = 22
-    rpt.freeze_panes = "A2"
-    _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+    if has_module:
+        rpt.column_dimensions["A"].width = 40
+        rpt.column_dimensions["B"].width = 44
+        rpt.column_dimensions["C"].width = 36
+        rpt.column_dimensions["D"].width = 32
+        rpt.column_dimensions["E"].width = 22
+        rpt.freeze_panes = "A2"
+        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+    else:
+        rpt.column_dimensions["A"].width = 50
+        rpt.column_dimensions["B"].width = 36
+        rpt.column_dimensions["C"].width = 32
+        rpt.column_dimensions["D"].width = 22
+        rpt.freeze_panes = "A2"
+        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 22}, content_cols={"A", "B"})
 
     wb.save(str(output_xlsx))
     log(f"✅ 輸出完成: {output_xlsx.name}")
 
 
 def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
-                 cancel_event=None):
+                 cancel_event=None, has_module: bool = True):
     """Compare two pre-built indexes; write strings added in new_index vs old_index."""
     old_keys = set(old_index.keys())
     new_keys = set(new_index.keys())
@@ -884,35 +1036,50 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
         for module, proj_data in sorted(new_index[en].items()):
             keys = proj_data.get("_all_keys", [])
             for key in (keys or [""]):
-                rows.append((module, en, key))
-    rows.sort(key=lambda x: (x[0], x[1], x[2]))
+                if has_module:
+                    rows.append((module, en, key))
+                else:
+                    rows.append((en, key))
 
-    # Uses module-level Workbook / styles (already imported at top)
+    if has_module:
+        rows.sort(key=lambda x: (x[0], x[1], x[2]))
+    else:
+        rows.sort(key=lambda x: (x[0], x[1]))
+
     _alt_fill = PatternFill("solid", fgColor="F5F3FF")
 
     wb = Workbook()
     ws = wb.active
     ws.title = "新增字串"
 
-    for ci, h in enumerate(["Module", "New Strings (EN)", "Key"], 1):
+    _hdrs = ["Module", "New Strings (EN)", "Key"] if has_module else ["New Strings (EN)", "Key"]
+    for ci, h in enumerate(_hdrs, 1):
         c = ws.cell(row=1, column=ci, value=h)
         c.fill = HEADER; c.font = H_FONT; c.alignment = CENTER; c.border = BORDER
     ws.row_dimensions[1].height = 24
 
-    for ri, (module, en, key) in enumerate(rows, 2):
-        for ci, v in enumerate([module, en, key], 1):
+    for ri, row_vals in enumerate(rows, 2):
+        for ci, v in enumerate(row_vals, 1):
             c = ws.cell(row=ri, column=ci, value=v)
             c.font = D_FONT; c.alignment = LEFT; c.border = BORDER
             if ri % 2 == 0:
                 c.fill = _alt_fill
 
-    ws.column_dimensions["A"].width = 38
-    ws.column_dimensions["B"].width = 44
-    ws.column_dimensions["C"].width = 44
+    n_cols = len(_hdrs)
+    last_col = get_column_letter(n_cols)
+    if has_module:
+        ws.column_dimensions["A"].width = 38
+        ws.column_dimensions["B"].width = 44
+        ws.column_dimensions["C"].width = 44
+        col_widths = {"A": 38, "B": 44, "C": 44}
+    else:
+        ws.column_dimensions["A"].width = 50
+        ws.column_dimensions["B"].width = 44
+        col_widths = {"A": 50, "B": 44}
     ws.freeze_panes = "A2"
     if rows:
-        ws.auto_filter.ref = f"A1:C{len(rows)+1}"
-    _auto_row_height(ws, {"A": 38, "B": 44, "C": 44}, content_cols={"B", "C"})
+        ws.auto_filter.ref = f"A1:{last_col}{len(rows)+1}"
+    _auto_row_height(ws, col_widths, content_cols={"A", "B"} if not has_module else {"B", "C"})
 
     wb.save(str(output_xlsx))
     log(f"✅ 輸出完成: {output_xlsx.name}（{len(rows)} 列，{len(added)} 個新字串）")
@@ -947,10 +1114,11 @@ def _auto_row_height(ws, col_widths: dict, content_cols: set = None,
 
 # ── Excel sub-builders ───────────────────────────────────────────────────────
 
-def _build_test_sheet(wb, test_rows_dedup: list, log):
+def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
     """
     Append Test Sheet to wb.
     test_rows_dedup: list of (lang_str, page, module, en, trans_or_None, fill_hex)
+    has_module: if False, skip the Module column (Web format).
     """
     _lang_counts  = Counter(_tr[0] for _tr in test_rows_dedup)
     _n_langs      = len(_lang_counts)
@@ -969,7 +1137,9 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
         return _res
     _precomp = {_n: _greedy(_n) for _n in range(2, _MAX_T + 1)}
 
-    _CFG_COL = 12; _NAME_COL = 13; _ASGN_LANG = 15; _ASGN_START = 16
+    _col_off = 0 if has_module else -1
+    _CFG_COL = 12 + _col_off; _NAME_COL = 13 + _col_off
+    _ASGN_LANG = 15 + _col_off; _ASGN_START = 16 + _col_off
 
     ts = wb.create_sheet("Test Sheet")
     TS_TR_FILL   = PatternFill("solid", fgColor="D9EAD3")
@@ -991,7 +1161,10 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
     _cust_col_l = get_column_letter(_CUSTOM_COL)     # "U"
     _custom_rng = f"${_cust_col_l}$2:${_cust_col_l}${1 + _n_langs}"
 
-    for _ci, _h in enumerate(["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"], 1):
+    _data_hdrs = (["Language", "Page", "Module", "EN (Base)", "Translation", "Tester", "Test result"]
+                  if has_module else
+                  ["Language", "Page", "EN (Base)", "Translation", "Tester", "Test result"])
+    for _ci, _h in enumerate(_data_hdrs, 1):
         _c = ts.cell(row=1, column=_ci, value=_h)
         _c.alignment = CENTER; _c.border = BORDER
         if _h in ("Tester", "Test result"):
@@ -1010,7 +1183,10 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
         _is_server = (_trans is None)
 
         _LANG_ALIGN = Alignment(horizontal="left", vertical="center", wrap_text=False)
-        for _ci, _v in enumerate([_lang, _page, _module, _en, _trans, None, None], 1):
+        _row_vals = ([_lang, _page, _module, _en, _trans, None, None]
+                     if has_module else
+                     [_lang, _page, _en, _trans, None, None])
+        for _ci, _v in enumerate(_row_vals, 1):
             _c = ts.cell(row=_r, column=_ci, value=_v)
             _c.font = Font(name="Microsoft JhengHei UI", size=10)
             _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
@@ -1020,8 +1196,9 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
             else:
                 _c.fill = _row_bg
 
-        _tc = ts.cell(row=_r, column=6)
-        # Priority: custom name (col U) → greedy auto-assignment
+        _TESTER_COL = 6 if has_module else 5
+        _tc = ts.cell(row=_r, column=_TESTER_COL)
+        # Priority: custom name (col U/T) → greedy auto-assignment
         _tc.value = (
             f'=IFERROR('
             f'IF(INDEX({_custom_rng},MATCH(A{_r},{_lang_rng},0))<>"",'
@@ -1033,21 +1210,29 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
         _tc.alignment = CENTER; _tc.border = BORDER; _tc.fill = _row_bg
         ts.row_dimensions[_r].height = 18
 
-    for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 18, 20]):
-        ts.column_dimensions[_col].width = _w
-    ts.freeze_panes = "A2"
-    ts.auto_filter.ref = f"A1:G{_n_data + 1}"
+    if has_module:
+        for _col, _w in zip("ABCDEFG", [18, 10, 36, 42, 36, 18, 20]):
+            ts.column_dimensions[_col].width = _w
+        ts.freeze_panes = "A2"
+        ts.auto_filter.ref = f"A1:G{_n_data + 1}"
+    else:
+        for _col, _w in zip("ABCDEF", [18, 10, 42, 36, 18, 20]):
+            ts.column_dimensions[_col].width = _w
+        ts.freeze_panes = "A2"
+        ts.auto_filter.ref = f"A1:F{_n_data + 1}"
 
-    for _col, _h in zip([9, 10], ["Language", "# Strings"]):
+    _STAT_LANG_COL = 9 + _col_off
+    _STAT_CNT_COL  = 10 + _col_off
+    for _col, _h in zip([_STAT_LANG_COL, _STAT_CNT_COL], ["Language", "# Strings"]):
         _c = ts.cell(row=1, column=_col, value=_h)
         _c.fill = HEADER; _c.font = H_FONT; _c.alignment = CENTER
     for _i, (_l, _cnt) in enumerate(sorted(_lang_counts.items()), 2):
-        _lc = ts.cell(row=_i, column=9, value=_l)
+        _lc = ts.cell(row=_i, column=_STAT_LANG_COL, value=_l)
         _lc.font = Font(name="Microsoft JhengHei UI", size=10); _lc.fill = TS_SUM_FILL; _lc.alignment = LEFT
-        _nc = ts.cell(row=_i, column=10, value=_cnt)
+        _nc = ts.cell(row=_i, column=_STAT_CNT_COL, value=_cnt)
         _nc.font = Font(name="Microsoft JhengHei UI", size=10, bold=True); _nc.fill = TS_SUM_FILL; _nc.alignment = CENTER
     _sum_ttl_r = 2 + _n_langs
-    for _col, _v in [(9, "Total"), (10, _n_data)]:
+    for _col, _v in [(_STAT_LANG_COL, "Total"), (_STAT_CNT_COL, _n_data)]:
         _tc2 = ts.cell(row=_sum_ttl_r, column=_col, value=_v)
         _tc2.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="FFFFFF")
         _tc2.fill = TS_TTL_FILL; _tc2.alignment = CENTER
@@ -1107,13 +1292,13 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
         _cc.fill = TS_EDIT_FILL; _cc.alignment = CENTER
         _dv.add(_cc)
 
-    ts.column_dimensions["H"].width = 4
-    ts.column_dimensions["I"].width = 22
-    ts.column_dimensions["J"].width = 12
-    ts.column_dimensions["K"].width = 4
+    ts.column_dimensions[get_column_letter(8 + _col_off)].width  = 4   # spacer before stats
+    ts.column_dimensions[get_column_letter(_STAT_LANG_COL)].width = 22
+    ts.column_dimensions[get_column_letter(_STAT_CNT_COL)].width  = 12
+    ts.column_dimensions[get_column_letter(11 + _col_off)].width  = 4   # spacer before config
     ts.column_dimensions[get_column_letter(_CFG_COL)].width  = 22
     ts.column_dimensions[get_column_letter(_NAME_COL)].width = 18
-    ts.column_dimensions["N"].width = 4
+    ts.column_dimensions[get_column_letter(14 + _col_off)].width  = 4   # spacer before assignment
     ts.column_dimensions[get_column_letter(_ASGN_LANG)].width = 22
     for _ni in range(_MAX_T - 1):
         ts.column_dimensions[get_column_letter(_ASGN_START + _ni)].width = 7
@@ -1123,12 +1308,15 @@ def _build_test_sheet(wb, test_rows_dedup: list, log):
 
 
 def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
-                       lang_label: dict, ignore_set):
+                       lang_label: dict, ignore_set, has_module: bool = True):
     """Append 翻譯問題報告 sheet to wb. Returns (n_groups, n_issues)."""
     rpt = wb.create_sheet("翻譯問題報告")
     RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
 
-    for ci, h in enumerate(["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"], 1):
+    _issue_hdrs = (["Module", "ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"]
+                   if has_module else
+                   ["ENU 翻譯檔字串", "問題 Key", "語言", "問題類型"])
+    for ci, h in enumerate(_issue_hdrs, 1):
         c = rpt.cell(row=1, column=ci, value=h)
         c.fill = RPT_H_FILL
         c.font = Font(bold=True, color="FFFFFF", name="Microsoft JhengHei UI", size=10)
@@ -1162,46 +1350,69 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
             else:
                 continue
 
-            grp_key = (module, enu_val, issue, keys_str)
+            grp_key = ((module, enu_val, issue, keys_str) if has_module
+                       else (enu_val, issue, keys_str))
             if grp_key not in rpt_groups:
                 rpt_groups[grp_key] = []
             if label not in rpt_groups[grp_key]:
                 rpt_groups[grp_key].append(label)
 
-    sorted_groups = sorted(rpt_groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
+    if has_module:
+        sorted_groups = sorted(rpt_groups.items(), key=lambda x: (x[0][0], x[0][2], x[0][1]))
+    else:
+        sorted_groups = sorted(rpt_groups.items(), key=lambda x: (x[0][1], x[0][0]))
 
-    prev_module = None
-    for ri, ((module, enu_val, issue, keys_str), langs_list) in enumerate(sorted_groups, 2):
-        is_new_mod = (module != prev_module); prev_module = module
+    _prev_grp = None
+    for ri, (grp_key, langs_list) in enumerate(sorted_groups, 2):
+        if has_module:
+            module, enu_val, issue, keys_str = grp_key
+        else:
+            enu_val, issue, keys_str = grp_key
+            module = ""
+        is_new_grp = (grp_key[0] != (_prev_grp[0] if _prev_grp else None))
+        _prev_grp = grp_key
         row_border = Border(
             left=thin, right=thin,
-            top=Side(style="medium" if is_new_mod else "thin",
-                     color="C0392B" if is_new_mod else "DDDDDD"),
+            top=Side(style="medium" if is_new_grp else "thin",
+                     color="C0392B" if is_new_grp else "DDDDDD"),
             bottom=thin)
         row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
         rpt.row_dimensions[ri].height = row_h
 
-        for ci, v in enumerate([module, enu_val, keys_str, ", ".join(langs_list), issue], 1):
+        _row_vals = ([module, enu_val, keys_str, ", ".join(langs_list), issue]
+                     if has_module else
+                     [enu_val, keys_str, ", ".join(langs_list), issue])
+        _issue_ci = 5 if has_module else 4
+        _key_ci   = 3 if has_module else 2
+        for ci, v in enumerate(_row_vals, 1):
             c = rpt.cell(row=ri, column=ci, value=v or None)
             c.border = row_border
-            if ci == 5:
+            if ci == _issue_ci:
                 c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
                 c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True)
                 c.alignment = LEFT
-            elif ci == 3:
+            elif ci == _key_ci:
                 c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             else:
                 c.font = Font(name="Microsoft JhengHei UI", size=10)
                 c.alignment = LEFT
 
-    rpt.column_dimensions["A"].width = 40
-    rpt.column_dimensions["B"].width = 44
-    rpt.column_dimensions["C"].width = 36
-    rpt.column_dimensions["D"].width = 32
-    rpt.column_dimensions["E"].width = 22
-    rpt.freeze_panes = "A2"
-    _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+    if has_module:
+        rpt.column_dimensions["A"].width = 40
+        rpt.column_dimensions["B"].width = 44
+        rpt.column_dimensions["C"].width = 36
+        rpt.column_dimensions["D"].width = 32
+        rpt.column_dimensions["E"].width = 22
+        rpt.freeze_panes = "A2"
+        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+    else:
+        rpt.column_dimensions["A"].width = 50
+        rpt.column_dimensions["B"].width = 36
+        rpt.column_dimensions["C"].width = 32
+        rpt.column_dimensions["D"].width = 22
+        rpt.freeze_panes = "A2"
+        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 22}, content_cols={"A", "B"})
     return len(sorted_groups), sum(len(v) for v in rpt_groups.values())
 
 
@@ -1238,7 +1449,8 @@ def _build_legend_sheet(wb):
 
 def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                    output_xlsx: Path, log, target_langs: dict | None = None,
-                   ignore_set: set = None, cancel_event=None):
+                   ignore_set: set = None, cancel_event=None,
+                   has_module: bool = True):
     import pandas as pd_
     import fnmatch as _fnmatch
     df       = pd_.read_excel(str(input_xlsx), header=0)
@@ -1377,11 +1589,18 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                            bottom=Side(style="thin", color="DDDDDD"))
     KEY_COL_FILL  = PatternFill("solid", fgColor="F5F3FF")
 
-    for ci, h in enumerate(["Page", "Module", "EN (Base, from App)", "Key(s)"] +
-                            [_hdr(l) for l in sorted_langs], 1):
+    _base_hdrs = (["Page", "Module", "EN (Base, from App)", "Key(s)"]
+                  if has_module else
+                  ["Page", "EN (Base, from App)", "Key(s)"])
+    for ci, h in enumerate(_base_hdrs + [_hdr(l) for l in sorted_langs], 1):
         c = ws.cell(row=1, column=ci, value=h)
         c.fill, c.font, c.alignment, c.border = HEADER, H_FONT, CENTER, BORDER
     ws.row_dimensions[1].height = 32
+    # Column indices for data rows
+    _mod_ci  = 2                          # Module col (only used when has_module)
+    _en_ci   = 3 if has_module else 2     # EN col
+    _key_ci  = 4 if has_module else 3     # Key col
+    _lang_ci = 5 if has_module else 4     # First lang col
 
     test_rows: list = []   # collects (lang_header, page, module, en, trans, fill_hex) for Test Sheet
 
@@ -1411,18 +1630,24 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.font = B_FONT if is_first else DIM_FONT
         c.alignment, c.border = LEFT, border
 
-        # Col 2: Module — ALWAYS show (each row = different module or key)
-        if not_found:
-            c = ws.cell(row=ri, column=2, value="⚠️ 查無字串")
-            c.fill, c.font, c.alignment, c.border = NF_FILL, NF_FONT, LEFT, border
+        # Col 2: Module — only when has_module
+        if has_module:
+            if not_found:
+                c = ws.cell(row=ri, column=_mod_ci, value="⚠️ 查無字串")
+                c.fill, c.font, c.alignment, c.border = NF_FILL, NF_FONT, LEFT, border
+            else:
+                c = ws.cell(row=ri, column=_mod_ci, value=rd["module"] or None)
+                c.fill = MODULE_FILL
+                c.font = MODULE_FONT
+                c.alignment, c.border = LEFT, border
         else:
-            c = ws.cell(row=ri, column=2, value=rd["module"] or None)
-            c.fill = MODULE_FILL
-            c.font = MODULE_FONT
-            c.alignment, c.border = LEFT, border
+            # No module col — show ⚠ in EN col when not found
+            pass
 
-        # Col 3: EN Base — dim on repeated rows
-        c = ws.cell(row=ri, column=3, value=_xl_safe(en_val) if is_first else None)
+        # EN Base — dim on repeated rows
+        c = ws.cell(row=ri, column=_en_ci, value=_xl_safe(en_val) if is_first else None)
+        if not has_module and not_found and is_first:
+            c.fill, c.font, c.alignment, c.border = NF_FILL, NF_FONT, LEFT, border
         if rd.get("fuzzy") and is_first:
             c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E65100")
             from openpyxl.comments import Comment
@@ -1436,15 +1661,15 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             c.font = B_FONT if is_first else DIM_FONT
         c.alignment, c.border = LEFT, border
 
-        # Col 4: Key name (one key per row, no symbols)
-        c = ws.cell(row=ri, column=4, value=_xl_safe(key_name) or None)
+        # Key col
+        c = ws.cell(row=ri, column=_key_ci, value=_xl_safe(key_name) or None)
         c.fill   = KEY_COL_FILL
         c.font = Font(name="Microsoft JhengHei UI", size=10)
         c.alignment = LEFT
         c.border = border
 
-        # Col 5+: translations (per this key's own translations)
-        for ci, lang in enumerate(sorted_langs, 5):
+        # Lang cols
+        for ci, lang in enumerate(sorted_langs, _lang_ci):
             val     = trans.get(lang, "")
             is_base = (lang == "en")
             if is_base:
@@ -1478,21 +1703,30 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                 test_rows.append((_ts_lang(_sl), rd["page"], "⚠️ Server string", en_val, None, "FFF3CD"))
 
     ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 40   # Module — longest: pf-flutter-photo-editing-copilot-doc (36)
-    ws.column_dimensions["C"].width = 42
-    ws.column_dimensions["D"].width = 36   # Key(s)
+    if has_module:
+        ws.column_dimensions["B"].width = 40   # Module
+        ws.column_dimensions["C"].width = 42   # EN
+        ws.column_dimensions["D"].width = 36   # Key
+    else:
+        ws.column_dimensions["B"].width = 42   # EN
+        ws.column_dimensions["C"].width = 36   # Key
+    _freeze = get_column_letter(_lang_ci) + "2"
     for i in range(len(sorted_langs)):
-        ws.column_dimensions[get_column_letter(i + 5)].width = 28
-    ws.freeze_panes = "E2"
+        ws.column_dimensions[get_column_letter(i + _lang_ci)].width = 28
+    ws.freeze_panes = _freeze
 
-    main_col_widths = {"A": 16, "B": 40, "C": 42, "D": 36}
+    main_col_widths = {"A": 16}
+    if has_module:
+        main_col_widths.update({"B": 40, "C": 42, "D": 36})
+    else:
+        main_col_widths.update({"B": 42, "C": 36})
     lang_cols = set()
     for i in range(len(sorted_langs)):
-        col = get_column_letter(i + 5)
+        col = get_column_letter(i + _lang_ci)
         main_col_widths[col] = 28
         lang_cols.add(col)
-    # Only measure translation columns (E+) and EN column (C) for height calculation
-    _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {"C"})
+    _en_col_letter = get_column_letter(_en_ci)
+    _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {_en_col_letter})
 
     # ── Sheet 2: Test Sheet ───────────────────────────────────────────────────
     seen_test: set = set()
@@ -1503,10 +1737,11 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             seen_test.add(_key)
             test_rows_dedup.append(_tr)
     test_rows_dedup.sort(key=lambda x: x[0])
-    _build_test_sheet(wb, test_rows_dedup, log)
+    _build_test_sheet(wb, test_rows_dedup, log, has_module=has_module)
 
     # ── Sheet 3: 翻譯問題報告 ────────────────────────────────────────────────
-    n_groups, n_issues = _build_issue_sheet(wb, rows_data, sorted_langs, lang_label, ignore_set)
+    n_groups, n_issues = _build_issue_sheet(wb, rows_data, sorted_langs, lang_label, ignore_set,
+                                            has_module=has_module)
     log(f"📋 翻譯問題報告: {n_groups} 筆（{n_issues} 個問題）")
 
     # ── Sheet 4: 說明 ─────────────────────────────────────────────────────────
@@ -1533,6 +1768,7 @@ class App(tk.Tk):
         self._convert_in_path = self._convert_out_path = None
         self._cancel_event = threading.Event()
         self._ignore_var = tk.StringVar(value="未設定（可選）")
+        self._web_target_langs: dict = {}   # populated when Web zip is loaded
 
         # Scrollable main canvas
         self._canvas = tk.Canvas(self, bg="#1e1e2e", highlightthickness=0)
@@ -1588,8 +1824,11 @@ class App(tk.Tk):
                     fg="#1e1e2e"  if name == last_app else "#a6adc8"
                 )
             self._app_var.set(last_app)
-            cfg = APP_CONFIGS.get(last_app, {})
-            self._lang_preview.configure(text="  ".join(cfg.keys()) if cfg else "（全部語言）")
+            if last_app == "Web":
+                self._lang_preview.configure(text="（選取 Zip 後自動偵測語言）")
+            else:
+                cfg = APP_CONFIGS.get(last_app, {})
+                self._lang_preview.configure(text="  ".join(cfg.keys()) if cfg else "（全部語言）")
 
         app = self._app_var.get()
         app_cfg = self._cfg.get(app, {})
@@ -1691,7 +1930,10 @@ class App(tk.Tk):
         self._app_buttons = {}
         for app_name in APP_CONFIGS:
             langs = APP_CONFIGS[app_name]
-            count = len(langs) if langs else "全部"
+            if app_name == "Web":
+                count = "動態"
+            else:
+                count = len(langs) if langs else "全部"
             btn = tk.Button(app_hdr, text=f"{app_name}({count})",
                             font=("Microsoft JhengHei UI", 10, "bold"), relief="flat",
                             cursor="hand2", padx=7, pady=4, bd=0,
@@ -2071,9 +2313,30 @@ class App(tk.Tk):
                 btn.configure(bg="#313244", fg="#a6adc8",
                               activebackground="#45475a", activeforeground="#ffffff")
         cfg = APP_CONFIGS.get(app_name)
-        self._lang_preview.configure(
-            text="  ".join(cfg.keys()) if cfg else "（全部語言）"
-        )
+        if app_name == "Web":
+            langs_text = ("  ".join(self._web_target_langs.keys())
+                          if self._web_target_langs
+                          else "（選取 Zip 後自動偵測語言）")
+            self._lang_preview.configure(text=langs_text)
+        else:
+            self._lang_preview.configure(
+                text="  ".join(cfg.keys()) if cfg else "（全部語言）"
+            )
+
+        # Disable/enable convert mode for Web
+        if hasattr(self, '_mode_buttons'):
+            is_web = (app_name == "Web")
+            _conv_btn = self._mode_buttons.get("convert")
+            if _conv_btn:
+                if is_web:
+                    _conv_btn.configure(state="disabled", bg="#1e1e2e",
+                                        fg="#45475a", cursor="", activebackground="#1e1e2e")
+                    if self._mode_var.get() == "convert":
+                        self._set_mode("excel")
+                else:
+                    _conv_btn.configure(state="normal", cursor="hand2")
+                    # Re-apply proper coloring via _set_mode
+                    self._set_mode(self._mode_var.get())
 
         if not init:
             # Load this app's saved paths (don't clear — restore from config)
@@ -2115,6 +2378,15 @@ class App(tk.Tk):
             save_config(self._cfg)
             self._rebuild_scan_checkboxes()
 
+    def _update_web_lang_preview(self):
+        """Update lang preview label for Web app after zip is loaded."""
+        if self._app_var.get() != "Web": return
+        langs = self._web_target_langs or {}
+        if langs:
+            self._lang_preview.configure(text="  ".join(langs.keys()))
+        else:
+            self._lang_preview.configure(text="（選取 Zip 後自動偵測語言）")
+
     def _rebuild_scan_checkboxes(self):
         """Rebuild lang checkboxes when App selection changes."""
         if not hasattr(self, '_scan_lang_vars'): return
@@ -2124,9 +2396,13 @@ class App(tk.Tk):
                     child.destroy()
                 break
         self._scan_lang_vars.clear()
-        app   = self._app_var.get()
-        cfg   = APP_CONFIGS.get(app, {}) or {}
-        langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
+        app = self._app_var.get()
+        if app == "Web":
+            cfg   = self._web_target_langs or {}
+            langs = [(code, lang) for code, lang in cfg.items()]
+        else:
+            cfg   = APP_CONFIGS.get(app, {}) or {}
+            langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
         cols  = 4
         frames = [w for w in self._scan_panel.winfo_children() if isinstance(w, tk.Frame)]
         cb_frame = frames[0] if frames else self._scan_panel
@@ -2220,6 +2496,14 @@ class App(tk.Tk):
         cache_dir.mkdir(exist_ok=True)
         index_path = cache_dir / f"lookup_{zip_path.stem}_{cache_key}.json"
 
+        web_zip = _is_web_zip(zip_path)
+        if web_zip:
+            # Always update web langs (fast filename scan, even on cache hit)
+            detected = _detect_web_langs_from_zip(zip_path)
+            self._web_target_langs = detected
+            self.after(0, self._rebuild_scan_checkboxes)
+            self.after(0, self._update_web_lang_preview)
+
         if index_path.exists():
             self._log("📂 發現快取索引，直接載入...")
             raw        = json.loads(index_path.read_text("utf-8"))
@@ -2228,7 +2512,10 @@ class App(tk.Tk):
             self._log(f"✅ 索引載入: {len(index)} 個字串")
             return index, norm_index
 
-        index, norm_index = build_index(zip_path, "en", self._log)
+        if web_zip:
+            index, norm_index, _ = build_web_index(zip_path, self._log)
+        else:
+            index, norm_index = build_index(zip_path, "en", self._log)
         try:
             out_list = [{"en": k, "projects": v} for k, v in index.items()]
             index_path.write_text(
@@ -2433,7 +2720,12 @@ class App(tk.Tk):
                 index, _ = self._load_index(zip_path)
                 if self._cancel_event.is_set():
                     self._log("⚠️  已取消"); return
-                target_langs = APP_CONFIGS.get(self._app_var.get())
+                _scan_app = self._app_var.get()
+                if _scan_app == "Web":
+                    target_langs = self._web_target_langs or None
+                else:
+                    target_langs = APP_CONFIGS.get(_scan_app)
+                has_module = (_scan_app != "Web")
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
@@ -2441,7 +2733,8 @@ class App(tk.Tk):
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_scan_report(index, out_path, self._log, selected,
-                                     target_langs, ignore_set, self._cancel_event)
+                                     target_langs, ignore_set, self._cancel_event,
+                                     has_module=has_module)
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！報告已儲存至:\n   {out_path}")
 
@@ -2469,6 +2762,10 @@ class App(tk.Tk):
         if p:
             self._zip_path = Path(p)
             self._zip_var.set(self._fmt_name(Path(p).name))
+            if self._app_var.get() == "Web":
+                self._web_target_langs = _detect_web_langs_from_zip(self._zip_path)
+                self._rebuild_scan_checkboxes()
+                self._update_web_lang_preview()
             self._save_app_paths()
 
     def _pick_excel(self):
@@ -2565,7 +2862,8 @@ class App(tk.Tk):
                 new_index, _ = self._load_index(zip_new_path)
                 if cancel.is_set():
                     self._log("⚠️  已取消"); return
-                compare_zips(old_index, new_index, out_path, self._log, cancel)
+                compare_zips(old_index, new_index, out_path, self._log, cancel,
+                             has_module=(self._app_var.get() != "Web"))
                 if cancel.is_set(): return
                 self._log(f"\n🎉 完成！已儲存至:\n   {out_path}")
                 if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
@@ -2641,7 +2939,10 @@ class App(tk.Tk):
         def worker():
             try:
                 index, norm_index = self._load_index(self._zip_path)
-                target_langs = APP_CONFIGS.get(self._app_var.get())
+                _ql_app = self._app_var.get()
+                target_langs = (self._web_target_langs or None
+                                if _ql_app == "Web"
+                                else APP_CONFIGS.get(_ql_app))
                 lang_label   = {v: k for k, v in target_langs.items()} if target_langs else {}
                 allowed      = set(target_langs.values()) if target_langs else None
 
@@ -2739,7 +3040,11 @@ class App(tk.Tk):
                 if self._cancel_event.is_set():
                     self._log("⚠️  已取消"); return
                 selected_app = self._app_var.get()
-                target_langs = APP_CONFIGS.get(selected_app)
+                if selected_app == "Web":
+                    target_langs = self._web_target_langs or None
+                else:
+                    target_langs = APP_CONFIGS.get(selected_app)
+                has_module = (selected_app != "Web")
                 self._log(f"🎯 App: {selected_app}  ({len(target_langs) if target_langs else '全部'} 語言)")
 
                 ignore_set = set()
@@ -2748,7 +3053,8 @@ class App(tk.Tk):
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_excel(index, norm_index, excel_path, out_path, self._log,
-                               target_langs, ignore_set, self._cancel_event)
+                               target_langs, ignore_set, self._cancel_event,
+                               has_module=has_module)
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！檔案已儲存至:\n   {out_path}")
 
@@ -2807,7 +3113,7 @@ class App(tk.Tk):
 
         # Insert with highlight for version headers
         for line in CHANGELOG.splitlines(keepends=True):
-            if line.startswith("v1."):
+            if re.match(r'^v\d+\.', line):
                 txt.insert("end", line, "ver")
             elif line.startswith("─"):
                 txt.insert("end", line, "sep")
