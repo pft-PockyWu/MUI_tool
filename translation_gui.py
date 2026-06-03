@@ -17,6 +17,9 @@ TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
 CHANGELOG = """\
 v2.1
 ────────────────────────────────────────
+Bug 修正
+  • 切換模式時「轉換 Ignore」按鈕在 Web App 下會短暫恢復正常樣式
+
 新功能
   • 新增「Web」App 支援（cosmetic-web-doc JSON 格式）：
     → 動態偵測 Zip 內語言，無需手動設定
@@ -2437,8 +2440,14 @@ class App(tk.Tk):
 
     def _set_mode(self, mode: str, init: bool = False):
         self._mode_var.set(mode)
+        is_web = hasattr(self, '_app_var') and self._app_var.get() == "Web"
         for val, btn in self._mode_buttons.items():
-            if val == mode:
+            if val == "convert" and is_web:
+                # Keep convert button visually disabled on Web regardless of mode
+                btn.configure(bg="#1e1e2e", fg="#3d3d55", cursor="",
+                              activebackground="#1e1e2e", activeforeground="#3d3d55",
+                              command=lambda: None)
+            elif val == mode:
                 btn.configure(bg="#cba6f7", fg="#1e1e2e",
                               activebackground="#b4befe", activeforeground="#1e1e2e")
             else:
