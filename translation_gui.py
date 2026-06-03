@@ -1856,6 +1856,11 @@ class App(tk.Tk):
         if self._zip_path or self._excel_path:
             self._log(f"📂 已載入上次 {app} 設定")
 
+        # For Web app: detect langs from saved zip so scan checkboxes are populated
+        if app == "Web" and self._zip_path:
+            self._web_target_langs = _detect_web_langs_from_zip(self._zip_path)
+            self._update_web_lang_preview()
+
         # Rebuild scan checkboxes (also restores saved lang selections)
         self._rebuild_scan_checkboxes()
 
