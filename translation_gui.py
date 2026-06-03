@@ -2334,10 +2334,10 @@ class App(tk.Tk):
             _conv_btn = self._mode_buttons.get("convert")
             if _conv_btn:
                 if is_web:
+                    if self._mode_var.get() == "convert":
+                        self._set_mode("excel")   # switch mode first (re-styles all btns)
                     _conv_btn.configure(state="disabled", bg="#1e1e2e",
                                         fg="#45475a", cursor="", activebackground="#1e1e2e")
-                    if self._mode_var.get() == "convert":
-                        self._set_mode("excel")
                 else:
                     _conv_btn.configure(state="normal", cursor="hand2")
                     # Re-apply proper coloring via _set_mode
