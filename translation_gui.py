@@ -1989,7 +1989,7 @@ class App(tk.Tk):
         self._lang_preview = tk.Label(_preview_frame, text="", font=("Microsoft JhengHei UI", 10),
                                       fg="#cba6f7", bg=BG,
                                       wraplength=370, justify="left")
-        self._lang_preview.pack(anchor="nw")
+        self._lang_preview.pack(anchor="nw", fill="x")
         self._select_app(list(APP_CONFIGS.keys())[0], init=True)
 
         # Mode selector
@@ -2040,8 +2040,8 @@ class App(tk.Tk):
                  bg=BG, anchor="w")
         self._ignore_lbl.grid(row=3, column=0, sticky="w", pady=4)
         self._ignore_val = tk.Label(fp, textvariable=self._ignore_var, font=("Microsoft JhengHei UI", 9), fg="#a6adc8",
-                 bg=BG, anchor="w", width=22)
-        self._ignore_val.grid(row=3, column=1, sticky="w", padx=(4, 0))
+                 bg=BG, anchor="w")
+        self._ignore_val.grid(row=3, column=1, sticky="ew", padx=(4, 0))
         ig_btns = tk.Frame(fp, bg=BG)
         ig_btns.grid(row=3, column=2, padx=(4, 0))
         tk.Button(ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
