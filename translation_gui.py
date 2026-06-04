@@ -1958,7 +1958,7 @@ class App(tk.Tk):
         left = tk.Frame(body, bg=BG)
         left.grid(row=0, column=0, sticky="new", padx=(16, 8), pady=12)
 
-        # App selector (2-row layout)
+        # App selector (2-row grid, equal-width columns)
         app_hdr = tk.Frame(left, bg=BG)
         app_hdr.pack(fill="x", pady=(0, 3))
         tk.Label(app_hdr, text="選擇 App：", font=("Microsoft JhengHei UI", 11, "bold"),
@@ -1967,25 +1967,20 @@ class App(tk.Tk):
         app_btn_area.pack(side="left")
         _app_names = list(APP_CONFIGS.keys())
         _per_row   = (len(_app_names) + 1) // 2   # ceil(n/2): balanced split
-        _row_frames = []
-        for _ in range(2):
-            rf = tk.Frame(app_btn_area, bg=BG)
-            rf.pack(anchor="w", pady=(0, 3))
-            _row_frames.append(rf)
+        for c in range(_per_row):
+            app_btn_area.columnconfigure(c, uniform="app_btn", weight=1)
         self._app_var     = tk.StringVar(value=_app_names[0])
         self._app_buttons = {}
         for i, app_name in enumerate(_app_names):
             langs = APP_CONFIGS[app_name]
-            if app_name == "Web":
-                count = "動態"
-            else:
-                count = len(langs) if langs else "全部"
-            parent = _row_frames[0] if i < _per_row else _row_frames[1]
-            btn = tk.Button(parent, text=f"{app_name}({count})",
+            count = "動態" if app_name == "Web" else (len(langs) if langs else "全部")
+            row, col = divmod(i, _per_row)
+            btn = tk.Button(app_btn_area, text=f"{app_name}({count})",
                             font=("Microsoft JhengHei UI", 10, "bold"), relief="flat",
                             cursor="hand2", padx=7, pady=4, bd=0,
                             command=lambda n=app_name: self._select_app(n))
-            btn.pack(side="left", padx=(0, 4))
+            btn.grid(row=row, column=col, sticky="ew",
+                     padx=(0, 4), pady=(0, 3))
             self._app_buttons[app_name] = btn
         self._lang_preview = tk.Label(left, text="", font=("Microsoft JhengHei UI", 10),
                                       fg="#cba6f7", bg=BG,
