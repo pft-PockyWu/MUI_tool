@@ -18,6 +18,7 @@ CHANGELOG = """\
 v2.2
 ────────────────────────────────────────
 新功能
+  • 新增「YCA」App（YouCam AI Pro，16 語言）
   • YCVB 新增 HEB 希伯來語、ARA 阿拉伯語（共 18 語言）
 
 ────────────────────────────────────────
@@ -317,6 +318,25 @@ APP_CONFIGS: dict[str, dict | None] = {
         "NLD": "nl",
         "HEB": "he",
         "ARA": "ar",
+    },
+
+    "YCA": {
+        "ENU": "en",
+        "CHT": "zh-Hant",
+        "CHS": "zh-Hans",
+        "JPN": "ja",
+        "KOR": "ko",
+        "DEU": "de",
+        "ESP": "es",
+        "FRA": "fr",
+        "ITA": "it",
+        "RUS": "ru",
+        "PTB": "pt",
+        "IND": "id",
+        "THA": "th",
+        "TRK": "tr",
+        "MSL": "ms",
+        "NLD": "nl",
     },
 
     # Web: dynamic — languages detected from zip at runtime
