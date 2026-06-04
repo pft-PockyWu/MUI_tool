@@ -21,6 +21,7 @@ Bug 修正
   • 切換模式時「轉換 Ignore」按鈕在 Web App 下會短暫恢復正常樣式
 
 新功能
+  • YCVB 新增 ARA 阿拉伯語、HEB 希伯來語（共 18 語言）
   • 新增「Web」App 支援（cosmetic-web-doc JSON 格式）：
     → 動態偵測 Zip 內語言，無需手動設定
     → 輸出 Excel 無 Module 欄（Web 翻譯無模組概念）
@@ -297,6 +298,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "CHS": "zh-Hans",
         "JPN": "ja",
         "KOR": "ko",
+        "ARA": "ar",
         "DEU": "de",
         "ESP": "es",
         "FRA": "fr",
@@ -308,6 +310,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "TRK": "tr",
         "MSL": "ms",
         "NLD": "nl",
+        "HEB": "he",
     },
 
     # Web: dynamic — languages detected from zip at runtime
