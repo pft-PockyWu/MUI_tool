@@ -298,7 +298,6 @@ APP_CONFIGS: dict[str, dict | None] = {
         "CHS": "zh-Hans",
         "JPN": "ja",
         "KOR": "ko",
-        "ARA": "ar",
         "DEU": "de",
         "ESP": "es",
         "FRA": "fr",
@@ -311,6 +310,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "MSL": "ms",
         "NLD": "nl",
         "HEB": "he",
+        "ARA": "ar",
     },
 
     # Web: dynamic — languages detected from zip at runtime
