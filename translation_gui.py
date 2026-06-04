@@ -1982,10 +1982,14 @@ class App(tk.Tk):
             btn.grid(row=row, column=col, sticky="ew",
                      padx=(0, 4), pady=(0, 3))
             self._app_buttons[app_name] = btn
-        self._lang_preview = tk.Label(left, text="", font=("Microsoft JhengHei UI", 10),
+        # Fixed-height container so lang preview never shifts layout below it
+        _preview_frame = tk.Frame(left, bg=BG, height=54)
+        _preview_frame.pack(fill="x", pady=(0, 8))
+        _preview_frame.pack_propagate(False)
+        self._lang_preview = tk.Label(_preview_frame, text="", font=("Microsoft JhengHei UI", 10),
                                       fg="#cba6f7", bg=BG,
                                       wraplength=370, justify="left")
-        self._lang_preview.pack(anchor="w", pady=(0, 8))
+        self._lang_preview.pack(anchor="nw")
         self._select_app(list(APP_CONFIGS.keys())[0], init=True)
 
         # Mode selector
