@@ -10,11 +10,17 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.1.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.2.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.2
+────────────────────────────────────────
+新功能
+  • YCVB 新增 HEB 希伯來語、ARA 阿拉伯語（共 18 語言）
+
+────────────────────────────────────────
 v2.1
 ────────────────────────────────────────
 Bug 修正
