@@ -1958,20 +1958,30 @@ class App(tk.Tk):
         left = tk.Frame(body, bg=BG)
         left.grid(row=0, column=0, sticky="new", padx=(16, 8), pady=12)
 
-        # App selector
+        # App selector (2-row layout)
         app_hdr = tk.Frame(left, bg=BG)
         app_hdr.pack(fill="x", pady=(0, 3))
         tk.Label(app_hdr, text="選擇 App：", font=("Microsoft JhengHei UI", 11, "bold"),
-                 fg="#a6adc8", bg=BG).pack(side="left", padx=(0, 8))
-        self._app_var     = tk.StringVar(value=list(APP_CONFIGS.keys())[0])
+                 fg="#a6adc8", bg=BG).pack(side="left", anchor="n", padx=(0, 8))
+        app_btn_area = tk.Frame(app_hdr, bg=BG)
+        app_btn_area.pack(side="left")
+        _app_names = list(APP_CONFIGS.keys())
+        _per_row   = (len(_app_names) + 1) // 2   # ceil(n/2): balanced split
+        _row_frames = []
+        for _ in range(2):
+            rf = tk.Frame(app_btn_area, bg=BG)
+            rf.pack(anchor="w", pady=(0, 3))
+            _row_frames.append(rf)
+        self._app_var     = tk.StringVar(value=_app_names[0])
         self._app_buttons = {}
-        for app_name in APP_CONFIGS:
+        for i, app_name in enumerate(_app_names):
             langs = APP_CONFIGS[app_name]
             if app_name == "Web":
                 count = "動態"
             else:
                 count = len(langs) if langs else "全部"
-            btn = tk.Button(app_hdr, text=f"{app_name}({count})",
+            parent = _row_frames[0] if i < _per_row else _row_frames[1]
+            btn = tk.Button(parent, text=f"{app_name}({count})",
                             font=("Microsoft JhengHei UI", 10, "bold"), relief="flat",
                             cursor="hand2", padx=7, pady=4, bd=0,
                             command=lambda n=app_name: self._select_app(n))
