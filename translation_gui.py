@@ -2431,6 +2431,11 @@ class App(tk.Tk):
             _try_set(app_cfg.get("zip_old"),     self._zip_old_var,     "_zip_old_path")
             _try_set(app_cfg.get("diff_out"),    self._diff_out_var,    "_diff_out_path")
 
+            # For Web: refresh lang detection from restored zip
+            if app_name == "Web" and self._zip_path:
+                self._web_target_langs = _detect_web_langs_from_zip(self._zip_path)
+                self._update_web_lang_preview()
+
             self._cfg["last_app"] = app_name
             save_config(self._cfg)
             self._rebuild_scan_checkboxes()
