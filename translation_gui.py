@@ -20,6 +20,7 @@ v2.2
 新功能
   • 新增「YCA」App（YouCam AI Pro，16 語言）
   • YCVB 新增 HEB 希伯來語、ARA 阿拉伯語（共 18 語言）
+  • YCE 新增 DAN 丹麥語、POL 波蘭語（共 21 語言）
 
 ────────────────────────────────────────
 v2.1
@@ -267,6 +268,8 @@ APP_CONFIGS: dict[str, dict | None] = {
         "HUN": "hu",
         "SWE": "sv",
         "ARA": "ar",
+        "DAN": "da",
+        "POL": "pl",
     },
 
     "YCP": {
