@@ -4,23 +4,31 @@ MUI Translation Tool — GUI Version
 雙擊執行，選 zip + Excel，按 Run 即可。
 """
 
-import json, re, sys, zipfile, threading, heapq, os
+import json, re, sys, zipfile, threading, heapq, os, unicodedata
 from pathlib import Path
 from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.2.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.3.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.3
+────────────────────────────────────────
+新功能
+  • YCE 新增 DAN 丹麥語、POL 波蘭語（共 21 語言）
+  • 快速查詢結果依視覺寬度長至短排序，並顯示視覺字數
+  • 快速查詢：未翻譯或與英文相同改顯示 ❌，ENU 固定顯示 ✅
+  • 視覺長度計算改善：CJK／韓文等寬字元計為 2，全模式統一套用
+
+────────────────────────────────────────
 v2.2
 ────────────────────────────────────────
 新功能
   • 新增「YCA」App（YouCam AI Pro，16 語言）
   • YCVB 新增 HEB 希伯來語、ARA 阿拉伯語（共 18 語言）
-  • YCE 新增 DAN 丹麥語、POL 波蘭語（共 21 語言）
 
 ────────────────────────────────────────
 v2.1
@@ -562,12 +570,16 @@ def is_garbled(val: str) -> bool:
 
 def _visual_len(s: str) -> int:
     """
-    Count visible characters only, excluding Unicode combining marks
-    (e.g. Thai tone marks ่ ้ ๊ ๋, Arabic diacritics ً ٌ ٍ etc.)
-    so that 'หลีกเลี่ยง' and 'Vermeiden' compare by display width.
+    Visual display width:
+    - Combining marks (Thai tone marks, Arabic diacritics…) excluded.
+    - CJK / full-width chars (Korean, Chinese, Japanese…) count as 2.
     """
-    import unicodedata
-    return sum(1 for c in s if unicodedata.category(c) not in ('Mn', 'Mc', 'Me'))
+    total = 0
+    for c in s:
+        if unicodedata.category(c) in ('Mn', 'Mc', 'Me'):
+            continue
+        total += 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+    return total
 
 
 _RE_PRINTF   = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
@@ -3031,12 +3043,20 @@ class App(tk.Tk):
                             for en_val, proj_dict in sorted(hits, key=lambda x: x[0].lower()):
                                 self._log_ql(f"   📝 {en_val}")
                                 for proj, pt in sorted(proj_dict.items()):
-                                    for lang, val in sorted(pt.items()):
-                                        if lang.startswith('_'): continue
-                                        if allowed and lang not in allowed: continue
+                                    rows = sorted(
+                                        ((lang, val) for lang, val in pt.items()
+                                         if not lang.startswith('_') and (not allowed or lang in allowed)),
+                                        key=lambda kv: _visual_len(kv[1]), reverse=True
+                                    )
+                                    for lang, val in rows:
                                         code   = lang_label.get(lang, lang)
-                                        status = "🔴" if (not val or val.strip() == en_val.strip()) else "✅"
-                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}", "info")
+                                        if lang == "en":
+                                            status = "✅"
+                                        elif not val or val.strip() == en_val.strip():
+                                            status = "❌"
+                                        else:
+                                            status = "✅"
+                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)})", "info")
                         continue
 
                     # ── Normal / fuzzy lookup ──────────────────────────────
@@ -3056,11 +3076,20 @@ class App(tk.Tk):
                     note = f" → 模糊比對: {matched!r}" if matched != q else ""
                     self._log_ql(f"✅  {q!r}{note}")
                     for proj, pt in sorted(rec.items()):
-                        for lang, val in sorted(pt.items()):
-                            if allowed and lang not in allowed: continue
+                        rows = sorted(
+                            ((lang, val) for lang, val in pt.items()
+                             if not allowed or lang in allowed),
+                            key=lambda kv: _visual_len(kv[1]), reverse=True
+                        )
+                        for lang, val in rows:
                             code   = lang_label.get(lang, lang)
-                            status = "🔴" if (not val or val.strip() == q.strip()) else "✅"
-                            self._log_ql(f"   {proj}  [{code}]  {status}  {val[:60]}", "info")
+                            if lang == "en":
+                                status = "✅"
+                            elif not val or val.strip() == q.strip():
+                                status = "❌"
+                            else:
+                                status = "✅"
+                            self._log_ql(f"   {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)})", "info")
                 self._log_ql("─────────────────────────────────────")
 
             except Exception as ex:
