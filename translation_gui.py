@@ -23,6 +23,10 @@ v2.3
   • 快速查詢：未翻譯或與英文相同改顯示 ❌，ENU 固定顯示 ✅
   • 視覺長度計算改善：CJK／韓文等寬字元計為 2，全模式統一套用
 
+Bug 修正
+  • 快速查詢：模糊比對命中時「與英文相同」誤顯示 ✅（改以翻譯檔英文比對）
+  • 快速查詢：內部欄位未過濾，特定情況下會導致查詢錯誤
+
 ────────────────────────────────────────
 v2.2
 ────────────────────────────────────────
@@ -3078,14 +3082,14 @@ class App(tk.Tk):
                     for proj, pt in sorted(rec.items()):
                         rows = sorted(
                             ((lang, val) for lang, val in pt.items()
-                             if not allowed or lang in allowed),
+                             if not lang.startswith('_') and (not allowed or lang in allowed)),
                             key=lambda kv: _visual_len(kv[1]), reverse=True
                         )
                         for lang, val in rows:
                             code   = lang_label.get(lang, lang)
                             if lang == "en":
                                 status = "✅"
-                            elif not val or val.strip() == q.strip():
+                            elif not val or val.strip() == matched.strip():
                                 status = "❌"
                             else:
                                 status = "✅"
