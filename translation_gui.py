@@ -388,10 +388,10 @@ _WEB_LOCALE_TO_LANG: dict[str, str] = {
 }
 
 def _is_web_zip(zip_path: Path) -> bool:
-    """Return True if zip contains top-level en_US.json (web translation format)."""
+    """Return True if zip contains en_US.json (web translation format)."""
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            return "en_US.json" in zf.namelist()
+            return any(Path(n).name == "en_US.json" for n in zf.namelist())
     except Exception:
         return False
 
