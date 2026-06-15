@@ -10,11 +10,20 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.3.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.4.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.4
+────────────────────────────────────────
+新功能
+  • 新增「跨平台比對」模式：Android vs iOS 翻譯一致性比對
+    - Key 比對：相同 key，各語言翻譯不一致的項目
+    - EN 比對：相同英文字串（key 可能不同），翻譯不一致的項目
+    - EN 比對額外顯示 Android/iOS 各自的 Module 與 Key
+
+────────────────────────────────────────
 v2.3
 ────────────────────────────────────────
 新功能
@@ -1136,6 +1145,141 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
     log(f"✅ 輸出完成: {output_xlsx.name}（{len(rows)} 列，{len(added)} 個新字串）")
 
 
+def _build_key_index(en_idx: dict) -> dict:
+    """Convert EN-grouped index → {key: {'_en': en_val, lang: val, ...}}"""
+    key_idx = {}
+    for en_val, proj_data in en_idx.items():
+        for proj, pt in proj_data.items():
+            for key, trans in pt.get('_key_trans', {}).items():
+                if key in key_idx:
+                    continue
+                entry = {'_en': en_val}
+                for lang, val in trans.items():
+                    if val:
+                        entry[lang] = val
+                key_idx[key] = entry
+    return key_idx
+
+
+def _flatten_en_idx(en_idx: dict, allowed: set | None) -> dict:
+    """Flatten {en_val: {proj: {lang: val}}} → {en_val: {'langs': {lang: val}, 'mods': [...], 'keys': [...]}}"""
+    flat = {}
+    for en_val, proj_data in en_idx.items():
+        merged = {}
+        mods, keys = [], []
+        for proj, pt in proj_data.items():
+            mods.append(proj)
+            keys.extend(pt.get('_all_keys', []))
+            for lang, val in pt.items():
+                if lang.startswith('_'): continue
+                if allowed and lang not in allowed: continue
+                if val and lang not in merged:
+                    merged[lang] = val
+        if merged:
+            flat[en_val] = {'langs': merged, 'mods': mods, 'keys': keys}
+    return flat
+
+
+def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
+    """Compare Android vs iOS indexes; write Key 比對 and EN 比對 sheets."""
+    allowed    = set(target_langs.values()) if target_langs else None
+    lang_label = {v: k for k, v in target_langs.items()} if target_langs else {}
+
+    def lang_disp(lc):
+        code = lang_label.get(lc, lc)
+        return f"{code} {LANG_NAMES.get(lc, '')}".strip()
+
+    HDR_FILL = PatternFill("solid", fgColor="CBA6F7")
+    RED_FILL = PatternFill("solid", fgColor="F38BA8")
+    ALT_FILL = PatternFill("solid", fgColor="F5F3FF")
+    HDR_FONT = Font(bold=True, color="1E1E2E")
+    _THIN    = Side(style="thin", color="CCCCCC")
+    _BORDER  = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+    _LEFT    = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+    log("🔍 建立 Key 索引...")
+    a_key = _build_key_index(android_idx)
+    i_key = _build_key_index(ios_idx)
+
+    log("📊 比對 Key...")
+    key_diffs = []
+    for key in sorted(set(a_key) & set(i_key)):
+        if cancel.is_set(): return
+        a, i = a_key[key], i_key[key]
+        en   = a.get('_en', i.get('_en', ''))
+        langs = set(a) | set(i)
+        langs.discard('_en')
+        if allowed: langs &= allowed
+        for lc in sorted(langs):
+            va, vi = a.get(lc, ''), i.get(lc, '')
+            if va != vi:
+                key_diffs.append((key, en, lc, va, vi))
+    log(f"   {len(set(a_key) & set(i_key))} 個共同 key，{len(key_diffs)} 個不一致")
+
+    log("📊 比對 EN 字串...")
+    a_en = _flatten_en_idx(android_idx, allowed)
+    i_en = _flatten_en_idx(ios_idx, allowed)
+    en_diffs = []
+    for en_val in sorted(set(a_en) & set(i_en)):
+        if cancel.is_set(): return
+        a_l, i_l = a_en[en_val], i_en[en_val]
+        langs = set(a_l['langs']) | set(i_l['langs'])
+        if allowed: langs &= allowed
+        for lc in sorted(langs):
+            va, vi = a_l['langs'].get(lc, ''), i_l['langs'].get(lc, '')
+            if va != vi:
+                en_diffs.append((en_val,
+                                 ', '.join(a_l['mods']), ', '.join(a_l['keys']),
+                                 ', '.join(i_l['mods']), ', '.join(i_l['keys']),
+                                 lc, va, vi))
+    log(f"   {len(set(a_en) & set(i_en))} 個共同英文字串，{len(en_diffs)} 個不一致")
+
+    if cancel.is_set(): return
+
+    wb = Workbook()
+
+    # ── Sheet 1: Key 比對 ──────────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Key 比對"
+    for ci, h in enumerate(["Key", "EN", "Language", "Android", "iOS"], 1):
+        c = ws1.cell(1, ci, h)
+        c.fill, c.font, c.alignment, c.border = HDR_FILL, HDR_FONT, _LEFT, _BORDER
+    ws1.auto_filter.ref = "A1:E1"
+    ws1.freeze_panes    = "A2"
+    for col, w in zip("ABCDE", [36, 36, 14, 40, 40]):
+        ws1.column_dimensions[col].width = w
+    for ri, (key, en, lc, va, vi) in enumerate(key_diffs, 2):
+        alt = ALT_FILL if ri % 2 == 0 else None
+        for ci, val in enumerate([key, en, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
+            c = ws1.cell(ri, ci, val)
+            c.alignment, c.border = _LEFT, _BORDER
+            if alt: c.fill = alt
+        if not va: ws1.cell(ri, 4).fill = RED_FILL
+        if not vi: ws1.cell(ri, 5).fill = RED_FILL
+
+    # ── Sheet 2: EN 比對 ───────────────────────────────────────────────────────
+    ws2 = wb.create_sheet("EN 比對")
+    for ci, h in enumerate(["EN", "Android Module", "Android Key", "iOS Module", "iOS Key", "Language", "Android", "iOS"], 1):
+        c = ws2.cell(1, ci, h)
+        c.fill, c.font, c.alignment, c.border = HDR_FILL, HDR_FONT, _LEFT, _BORDER
+    ws2.auto_filter.ref = "A1:H1"
+    ws2.freeze_panes    = "A2"
+    for col, w in zip("ABCDEFGH", [42, 28, 36, 28, 36, 14, 40, 40]):
+        ws2.column_dimensions[col].width = w
+    for ri, (en_val, a_mod, a_key, i_mod, i_key, lc, va, vi) in enumerate(en_diffs, 2):
+        alt = ALT_FILL if ri % 2 == 0 else None
+        for ci, val in enumerate([en_val, a_mod, a_key, i_mod, i_key, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
+            c = ws2.cell(ri, ci, val)
+            c.alignment, c.border = _LEFT, _BORDER
+            if alt: c.fill = alt
+        if not va: ws2.cell(ri, 7).fill = RED_FILL
+        if not vi: ws2.cell(ri, 8).fill = RED_FILL
+
+    wb.save(out_path)
+    log(f"✅ 完成：Key 不一致 {len(key_diffs)} 個 / EN 不一致 {len(en_diffs)} 個")
+    log(f"   → {out_path}")
+
+
 def _auto_row_height(ws, col_widths: dict, content_cols: set = None,
                      min_h: int = 15, line_h: int = 15):
     """
@@ -1813,8 +1957,11 @@ class App(tk.Tk):
         self._cfg = load_config()
         self._zip_path = self._excel_path = self._out_path = None
         self._ignore_path = None
-        self._zip_old_path = None   # diff mode: old version zip
-        self._diff_out_path = None  # diff mode: output xlsx
+        self._zip_old_path = None          # diff mode: old version zip
+        self._diff_out_path = None         # diff mode: output xlsx
+        self._xplat_android_path = None    # xplat mode: android zip
+        self._xplat_ios_path = None        # xplat mode: ios zip
+        self._xplat_out_path = None        # xplat mode: output xlsx
         self._scan_out_path = None
         self._convert_in_path = self._convert_out_path = None
         self._cancel_event = threading.Event()
@@ -1901,8 +2048,11 @@ class App(tk.Tk):
 
         _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
         _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
-        _try_set(app_cfg.get("zip_old"),     self._zip_old_var,     "_zip_old_path")
-        _try_set(app_cfg.get("diff_out"),    self._diff_out_var,    "_diff_out_path")
+        _try_set(app_cfg.get("zip_old"),      self._zip_old_var,      "_zip_old_path")
+        _try_set(app_cfg.get("diff_out"),     self._diff_out_var,     "_diff_out_path")
+        _try_set(app_cfg.get("xplat_android"), self._xplat_android_var, "_xplat_android_path")
+        _try_set(app_cfg.get("xplat_ios"),    self._xplat_ios_var,    "_xplat_ios_path")
+        _try_set(app_cfg.get("xplat_out"),    self._xplat_out_var,    "_xplat_out_path")
 
         if self._zip_path or self._excel_path:
             self._log(f"📂 已載入上次 {app} 設定")
@@ -1938,6 +2088,12 @@ class App(tk.Tk):
             self._cfg[app]["zip_old"]  = str(self._zip_old_path)
         if self._diff_out_path:
             self._cfg[app]["diff_out"] = str(self._diff_out_path)
+        if self._xplat_android_path:
+            self._cfg[app]["xplat_android"] = str(self._xplat_android_path)
+        if self._xplat_ios_path:
+            self._cfg[app]["xplat_ios"]     = str(self._xplat_ios_path)
+        if self._xplat_out_path:
+            self._cfg[app]["xplat_out"]     = str(self._xplat_out_path)
         if hasattr(self, '_scan_lang_vars'):
             self._cfg[app]["scan_langs"] = [l for l, v in self._scan_lang_vars.items() if v.get()]
         self._cfg["last_app"] = app
@@ -2036,6 +2192,12 @@ class App(tk.Tk):
                      padx=(0, 3) if c == 0 else 0,
                      pady=(0, 3) if r == 0 else 0)
             self._mode_buttons[val] = btn
+        _xplat_btn = tk.Button(mode_btns, text="跨平台比對",
+                               font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
+                               cursor="hand2", padx=14, pady=5, bd=0,
+                               command=lambda: self._set_mode("xplat"))
+        _xplat_btn.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        self._mode_buttons["xplat"] = _xplat_btn
         self._set_mode("excel", init=True)
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(0, 8))
@@ -2106,6 +2268,21 @@ class App(tk.Tk):
         self._bind_row_tooltip(self._diff_new_row, lambda: str(self._zip_path)     if self._zip_path     else None)
         self._bind_row_tooltip(self._diff_out_row, lambda: str(self._diff_out_path) if self._diff_out_path else None)
 
+        # Xplat mode file pickers (hidden by default)
+        self._xplat_fp = tk.Frame(fp_container, bg=BG)
+        self._xplat_android_var = tk.StringVar(value="尚未選取")
+        self._xplat_ios_var     = tk.StringVar(value="尚未選取")
+        self._xplat_out_var     = tk.StringVar(value="尚未選取")
+        self._xplat_android_row = self._make_file_row(
+            self._xplat_fp, "🤖 Android Zip:", self._xplat_android_var, self._pick_xplat_android, row=0)
+        self._xplat_ios_row = self._make_file_row(
+            self._xplat_fp, "🍎 iOS Zip:", self._xplat_ios_var, self._pick_xplat_ios, row=1)
+        self._xplat_out_row = self._make_file_row(
+            self._xplat_fp, "💾 輸出 Excel:", self._xplat_out_var, self._pick_xplat_out, row=2, is_save=True)
+        self._bind_row_tooltip(self._xplat_android_row, lambda: str(self._xplat_android_path) if self._xplat_android_path else None)
+        self._bind_row_tooltip(self._xplat_ios_row,     lambda: str(self._xplat_ios_path)     if self._xplat_ios_path     else None)
+        self._bind_row_tooltip(self._xplat_out_row,     lambda: str(self._xplat_out_path)     if self._xplat_out_path     else None)
+
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(10, 8))
 
         # Run buttons (left column bottom)
@@ -2141,6 +2318,12 @@ class App(tk.Tk):
                                        activebackground=_RUN_BG_ACT, activeforeground="white",
                                        relief="flat", padx=20, pady=8,
                                        cursor="hand2", command=self._run_diff)
+        self._xplat_run_btn = tk.Button(run_row, text="▶  比對",
+                                        font=("Microsoft JhengHei UI", 14, "bold"),
+                                        bg=_RUN_BG, fg="white",
+                                        activebackground=_RUN_BG_ACT, activeforeground="white",
+                                        relief="flat", padx=20, pady=8,
+                                        cursor="hand2", command=self._run_xplat)
         self._cancel_btn = tk.Button(run_row, text="■  取消",
                                      font=("Microsoft JhengHei UI", 14, "bold"),
                                      bg="#f38ba8", fg="white",
@@ -2214,6 +2397,22 @@ class App(tk.Tk):
                      "  • Key               — 對應的翻譯 Key\n\n"
                      "輸出結果按 Module 排序，方便逐模組確認。\n"
                      "支援 Auto Filter，可快速篩選特定模組。"
+                 ),
+                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
+                 justify="left").pack(anchor="w", pady=(6, 0))
+
+        # ── Xplat panel (right) ───────────────────────────────────────────────
+        self._xplat_panel = tk.Frame(right, bg="#27273a")
+        tk.Label(self._xplat_panel, text="📱  跨平台比對",
+                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
+        tk.Label(self._xplat_panel,
+                 text=(
+                     "選取 Android 與 iOS 翻譯 Zip，比對各語言翻譯是否一致。\n\n"
+                     "輸出兩個 Sheet：\n"
+                     "  • Key 比對  — 相同 key name，各語言翻譯不一致的項目\n"
+                     "  • EN 比對   — 相同英文字串（key 可能不同），翻譯不一致的項目\n\n"
+                     "比對語言以左側選擇的 App 語言清單為準。\n"
+                     "不一致的欄位標記紅色，空白值顯示「（未翻譯）」。"
                  ),
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
                  justify="left").pack(anchor="w", pady=(6, 0))
@@ -2420,6 +2619,7 @@ class App(tk.Tk):
             self._scan_out_path = None
             self._convert_in_path = self._convert_out_path = None
             self._zip_old_path = self._diff_out_path = None
+            self._xplat_android_path = self._xplat_ios_path = self._xplat_out_path = None
             self._zip_var.set("尚未選取")
             self._excel_var.set("尚未選取")
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
@@ -2429,6 +2629,9 @@ class App(tk.Tk):
             self._convert_out_var.set("尚未選取")
             self._zip_old_var.set("尚未選取")
             self._diff_out_var.set("尚未選取")
+            self._xplat_android_var.set("尚未選取")
+            self._xplat_ios_var.set("尚未選取")
+            self._xplat_out_var.set("尚未選取")
 
             app_cfg = self._cfg.get(app_name, {})
             def _try_set(path_str, var, attr):
@@ -2447,8 +2650,11 @@ class App(tk.Tk):
 
             _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
             _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
-            _try_set(app_cfg.get("zip_old"),     self._zip_old_var,     "_zip_old_path")
-            _try_set(app_cfg.get("diff_out"),    self._diff_out_var,    "_diff_out_path")
+            _try_set(app_cfg.get("zip_old"),       self._zip_old_var,       "_zip_old_path")
+            _try_set(app_cfg.get("diff_out"),      self._diff_out_var,      "_diff_out_path")
+            _try_set(app_cfg.get("xplat_android"), self._xplat_android_var, "_xplat_android_path")
+            _try_set(app_cfg.get("xplat_ios"),     self._xplat_ios_var,     "_xplat_ios_path")
+            _try_set(app_cfg.get("xplat_out"),     self._xplat_out_var,     "_xplat_out_path")
 
             # For Web: refresh lang detection from restored zip
             if app_name == "Web" and self._zip_path:
@@ -2524,12 +2730,16 @@ class App(tk.Tk):
                 self._convert_run_btn.pack_forget()
             if hasattr(self, '_diff_run_btn'):
                 self._diff_run_btn.pack_forget()
+            if hasattr(self, '_xplat_run_btn'):
+                self._xplat_run_btn.pack_forget()
             if mode == "excel":
                 self._run_btn.pack(side="left", padx=(0, 8))
             elif mode == "scan":
                 self._scan_run_btn.pack(side="left")
             elif mode == "convert":
                 self._convert_run_btn.pack(side="left")
+            elif mode == "xplat":
+                self._xplat_run_btn.pack(side="left")
             else:
                 self._diff_run_btn.pack(side="left")
 
@@ -2539,10 +2749,14 @@ class App(tk.Tk):
             self._conv_fp.pack_forget()
             if hasattr(self, '_diff_fp'):
                 self._diff_fp.pack_forget()
+            if hasattr(self, '_xplat_fp'):
+                self._xplat_fp.pack_forget()
             if mode == "convert":
                 self._conv_fp.pack(fill="x")
             elif mode == "diff":
                 self._diff_fp.pack(fill="x")
+            elif mode == "xplat":
+                self._xplat_fp.pack(fill="x")
             else:
                 self._std_fp.pack(fill="x")
 
@@ -2554,7 +2768,7 @@ class App(tk.Tk):
 
         if not init:
             # Hide all right panels first
-            for _p in ("_excel_panel", "_scan_panel", "_convert_panel", "_diff_panel"):
+            for _p in ("_excel_panel", "_scan_panel", "_convert_panel", "_diff_panel", "_xplat_panel"):
                 if hasattr(self, _p):
                     getattr(self, _p).pack_forget()
             if mode == "excel":
@@ -2563,6 +2777,8 @@ class App(tk.Tk):
                 self._scan_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             elif mode == "convert":
                 self._convert_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
+            elif mode == "xplat":
+                self._xplat_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             else:  # diff
                 self._diff_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
 
@@ -2965,6 +3181,95 @@ class App(tk.Tk):
                 messagebox.showerror("錯誤", str(e))
             finally:
                 self.after(0, self._finish_run, self._diff_run_btn)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _pick_xplat_android(self):
+        p = filedialog.askopenfilename(title="選取 Android 翻譯 Zip",
+                                       filetypes=[("Zip files", "*.zip"), ("All files", "*.*")])
+        if p:
+            self._xplat_android_path = Path(p)
+            self._xplat_android_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
+
+    def _pick_xplat_ios(self):
+        p = filedialog.askopenfilename(title="選取 iOS 翻譯 Zip",
+                                       filetypes=[("Zip files", "*.zip"), ("All files", "*.*")])
+        if p:
+            self._xplat_ios_path = Path(p)
+            self._xplat_ios_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
+
+    def _pick_xplat_out(self):
+        p = filedialog.asksaveasfilename(
+            title="輸出 Excel 路徑", defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")], initialfile="xplat_diff.xlsx")
+        if p:
+            self._xplat_out_path = Path(p)
+            self._xplat_out_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
+
+    def _run_xplat(self):
+        if not self._xplat_android_path:
+            messagebox.showwarning("缺少檔案", "請選取 Android Zip 檔"); return
+        if not self._xplat_ios_path:
+            messagebox.showwarning("缺少檔案", "請選取 iOS Zip 檔"); return
+        if not self._xplat_out_path:
+            default = self._xplat_android_path.parent / "xplat_diff.xlsx"
+            self._xplat_out_path = default
+            self._xplat_out_var.set(self._fmt_name(default.name))
+            self._save_app_paths()
+
+        if self._xplat_out_path.exists():
+            resolved = self._ask_file_exists(self._xplat_out_path)
+            if resolved is None: return
+            self._xplat_out_path = resolved
+            self._xplat_out_var.set(self._fmt_name(resolved.name))
+            self._save_app_paths()
+
+        self._cancel_event.clear()
+        self._xplat_run_btn.configure(state="disabled")
+        self._xplat_run_btn.pack_forget()
+        self._cancel_btn.pack(side="left")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(12)
+        self._progress_label.configure(text="")
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
+        self._log_box.configure(state="disabled")
+
+        android_path = self._xplat_android_path
+        ios_path     = self._xplat_ios_path
+        out_path     = self._xplat_out_path
+        cancel       = self._cancel_event
+        app          = self._app_var.get()
+        target_langs = (self._web_target_langs or None
+                        if app == "Web" else APP_CONFIGS.get(app))
+
+        def _task():
+            try:
+                self._log("📱 跨平台比對")
+                self._log(f"   Android: {android_path.name}")
+                self._log(f"   iOS:     {ios_path.name}")
+                android_idx, _ = self._load_index(android_path)
+                if cancel.is_set(): self._log("⚠️  已取消"); return
+                ios_idx, _     = self._load_index(ios_path)
+                if cancel.is_set(): self._log("⚠️  已取消"); return
+                compare_xplat(android_idx, ios_idx, target_langs, out_path, self._log, cancel)
+                if cancel.is_set(): return
+                self._log(f"\n🎉 完成！已儲存至:\n   {out_path}")
+                if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
+                    import subprocess
+                    if sys.platform == "win32":    os.startfile(str(out_path))
+                    elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
+                    else:                          subprocess.Popen(["xdg-open", str(out_path)])
+            except Exception as e:
+                import traceback
+                self._log(f"❌ 錯誤: {e}", "err")
+                self._log(traceback.format_exc(), "err")
+                messagebox.showerror("錯誤", str(e))
+            finally:
+                self.after(0, self._finish_run, self._xplat_run_btn)
 
         threading.Thread(target=_task, daemon=True).start()
 
