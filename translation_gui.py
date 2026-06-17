@@ -22,6 +22,7 @@ v2.4
     - Key 比對：相同 key，各語言翻譯不一致的項目
     - EN 比對：相同英文字串（key 可能不同），翻譯不一致的項目
     - EN 比對額外顯示 Android/iOS 各自的 Module 與 Key
+  • YMK 新增 RON 羅馬尼亞語、ELL 希臘語、HUN 匈牙利語（共 23 語言）
 
 ────────────────────────────────────────
 v2.3
@@ -271,6 +272,9 @@ APP_CONFIGS: dict[str, dict | None] = {
         "HEB": "he",
         "POL": "pl",
         "FIL": "fil",
+        "RON": "ro",
+        "ELL": "el",
+        "HUN": "hu",
     },
 
     "YCE": {
