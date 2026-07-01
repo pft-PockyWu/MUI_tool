@@ -881,22 +881,31 @@ def convert_scan_to_ignore(input_xlsx: Path, output_xlsx: Path, log) -> int:
         if df.shape[1] < 6:
             log(f"⚠️  '{sheet}' 欄位不足，跳過")
             continue
-        pass_rows = df[df.iloc[:, 5].astype(str).str.strip().str.lower() == "pass"]
-        count = 0
-        for _, row in pass_rows.iterrows():
+        n_pass = n_all = 0
+        for _, row in df.iterrows():
+            comment = str(row.iloc[5]).strip().lower() if pd.notna(row.iloc[5]) else ""
+            if comment not in ("pass", "all_pass"):
+                continue
             module   = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
             enu      = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
             keys_raw = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
             for key in keys_raw.split("\n"):
                 key = key.strip()
-                if key:
-                    records.setdefault((module, enu, key), set()).add(lang)
-                    count += 1
-        log(f"  {lang}: {len(pass_rows)} 列 Pass（{count} 個 Key）")
+                if not key:
+                    continue
+                k = (module, enu, key)
+                if comment == "all_pass":
+                    records[k] = {"ALL_LANGUAGES"}
+                    n_all += 1
+                elif "ALL_LANGUAGES" not in records.get(k, set()):
+                    records.setdefault(k, set()).add(lang)
+                    n_pass += 1
+        log(f"  {lang}: {n_pass} 個 Key Pass，{n_all} 個 Key ALL_LANGUAGES")
 
     rows = []
     for (module, enu, key), langs in sorted(records.items()):
-        rows.append([module, enu, key, ", ".join(sorted(langs))])
+        lang_str = "ALL_LANGUAGES" if "ALL_LANGUAGES" in langs else ", ".join(sorted(langs))
+        rows.append([module, enu, key, lang_str])
 
     wb = Workbook()
     ws = wb.active
