@@ -24,6 +24,7 @@ v2.4
     - EN 比對額外顯示 Android/iOS 各自的 Module 與 Key
   • YMK 新增 RON 羅馬尼亞語、ELL 希臘語、HUN 匈牙利語（共 23 語言）
   • 轉換 Ignore：Comment 為 all_pass 時語言欄輸出 ALL_LANGUAGES；同一字串跨 Sheet 自動去重
+  • 比對新字串 / 快速查詢：ARB 格式 Module 名稱改為正確的 package 名稱（原本錯誤顯示為 l10n）
 
 ────────────────────────────────────────
 v2.3
@@ -652,7 +653,8 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
                     proj = parts[1] if len(parts) >= 7 else parts[0]
                     process_file(proj, fname, raw, folder)
                 else:
-                    process_file(parts[-2], fname, raw)
+                    proj = parts[1] if parts[0] == "packages" and len(parts) >= 4 else parts[-2]
+                    process_file(proj, fname, raw)
     elif source.is_dir():
         for pd_ in sorted(source.iterdir()):
             if not pd_.is_dir(): continue
