@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_VERSION  = "v2.4.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
-TOOL_VERSION = "6"   # bump when index structure changes (forces cache rebuild)
+TOOL_VERSION = "7"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
 v2.4
