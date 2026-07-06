@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_VERSION  = "v2.4.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
-TOOL_VERSION = "7"   # bump when index structure changes (forces cache rebuild)
+TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
 v2.4
@@ -25,6 +25,28 @@ v2.4
   • YMK 新增 RON 羅馬尼亞語、ELL 希臘語、HUN 匈牙利語（共 23 語言）
   • 轉換 Ignore：Comment 為 all_pass 時語言欄輸出 ALL_LANGUAGES；同一字串跨 Sheet 自動去重
   • 比對新字串 / 快速查詢：ARB 格式 Module 名稱改為正確的 package 名稱（原本錯誤顯示為 l10n）
+
+Bug 修正
+  • iOS .strings 值未反轉義（\" \n \t 以字面保留）→ 跨平台比對誤報、快速查詢查不到
+  • 跨平台比對：同名 key 跨 module 只比第一個 → 改保留全部並以英文字串配對，不再比錯對象或漏報
+  • Android translatable="false" 字串被誤判為未翻譯 → 解析時直接跳過
+  • ARB 檔名語言碼不支援 3 字母（如 fil）→ 無 @@locale 時整檔遺失
+  • 比對新字串 / 跨平台比對 / 問題報告 / Test Sheet 輸出未清洗控制字元 → 特殊字元會導致整份報告中斷
+  • UTF-16 / 帶 BOM 的翻譯檔無法解析（舊版 Xcode .strings 為 UTF-16）→ 自動偵測編碼
+  • Android XML 註解未剝除 → 註解掉的舊字串會覆蓋正式值
+  • 快取索引損壞時無法自動復原 → 改為自動刪除並重建
+  • 清除 Ignore 設定後重開程式路徑會復活 → 確實從設定檔移除
+  • 模糊比對支援 %.1f、%% 與小數（如 0.5）
+  • 輸入 Excel 只填 Page 未填 EN 的列不再產生「查無字串」假項目
+  • Ignore 表語言代碼改為不分大小寫；未知代碼會顯示警告而非默默略過
+  • 執行任務期間鎖定模式與 App 切換，避免並發執行互相干擾
+  • 完成/錯誤彈窗改由主執行緒顯示（修正潛在的介面卡死）
+  • Android 同時有 values-zh-rTW 與 values-zh-rHK 時，CHT 固定採用 TW（HK 只補缺）
+  • Web：Test Sheet 的 Tester 自動分配公式引用錯誤欄位 → 修正（原本 Tester 欄全空白）
+  • Web：en_US.json 帶 BOM 或格式錯誤時直接崩潰 → 改為明確錯誤訊息；壞的語言檔跳過並警告
+  • Web：快速查詢現在會顯示 ENU 行（與其他 App 一致）
+  • Web：不支援 Ignore（無 Module 概念），Ignore 選取按鈕在 Web 下停用
+  • Web：「跨平台比對」在 Web 下停用（該功能僅適用 Android vs iOS）
 
 ────────────────────────────────────────
 v2.3
@@ -504,10 +526,22 @@ def _is_regional_variant(lang: str) -> bool:
 def parse_arb(text: str) -> tuple:
     try: data = json.loads(text)
     except: return "", {}
+    if not isinstance(data, dict): return "", {}
     loc  = data.get("@@locale") or data.get("localeCode")
     lang = loc.replace("_", "-") if loc else ""
     return lang, {k: v for k, v in data.items()
                   if not k.startswith("@") and isinstance(v, str)}
+
+def _decode_bytes(bs: bytes) -> str:
+    """UTF-8 (BOM-tolerant) with UTF-16 detection — old Xcode .strings are UTF-16."""
+    if bs[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        return bs.decode('utf-16', errors='replace')
+    return bs.decode('utf-8-sig', errors='replace')
+
+_IOS_ESC = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', "'": "'", '\\': '\\'}
+
+def _unescape_strings(s: str) -> str:
+    return re.sub(r'\\(.)', lambda m: _IOS_ESC.get(m.group(1), m.group(0)), s)
 
 def parse_strings(text: str) -> dict:
     text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
@@ -516,11 +550,11 @@ def parse_strings(text: str) -> dict:
         s = line.strip()
         if not s or s.startswith('//'): continue
         m = re.match(r'^"((?:[^"\\]|\\.)*)"[ \t]*=[ \t]*"((?:[^"\\]|\\.)*)"\s*;', s)
-        if m: entries[m.group(1)] = m.group(2)
+        if m: entries[_unescape_strings(m.group(1))] = _unescape_strings(m.group(2))
     return entries
 
 def lang_from_arb_name(stem: str) -> str:
-    m = re.search(r'_([a-z]{2}(?:_[A-Za-z]{2,4})*)$', stem)
+    m = re.search(r'_([a-z]{2,3}(?:_[A-Za-z]{2,4})*)$', stem)
     return m.group(1).replace("_", "-") if m else ""
 
 def lang_from_strings_name(name: str) -> str:
@@ -543,6 +577,7 @@ def lang_from_android_folder(folder: str) -> str:
 
 def parse_android_xml(text: str) -> dict:
     import html as _html
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
 
     def _clean(raw: str) -> str:
         raw = raw.strip()
@@ -553,8 +588,9 @@ def parse_android_xml(text: str) -> dict:
         return _html.unescape(raw).strip()
 
     entries = {}
-    for m in re.finditer(r'<string\s+name="([^"]+)"[^>]*>(.*?)</string>', text, re.DOTALL):
-        val = _clean(m.group(2))
+    for m in re.finditer(r'<string\s+name="([^"]+)"([^>]*)>(.*?)</string>', text, re.DOTALL):
+        if 'translatable="false"' in m.group(2): continue
+        val = _clean(m.group(3))
         if m.group(1) and val:
             entries[m.group(1)] = val
 
@@ -602,14 +638,15 @@ def _visual_len(s: str) -> int:
 
 
 _RE_PRINTF   = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
-_RE_PRINTF2  = re.compile(r'%[@disfeEgGuoxXld]+')
+_RE_PRINTF2  = re.compile(r'%[0-9.]*[@disfeEgGuoxXld]+')
 _RE_BRACE    = re.compile(r'\{[^}]+\}')
 _RE_DBRACKET = re.compile(r'\[\[|\]\]')   # strip [[ ]] wrappers, keep inner content
-_RE_NUM      = re.compile(r'(?<!\w)\d+(?!\w)')
+_RE_NUM      = re.compile(r'(?<!\w)\d+(?:\.\d+)?(?!\w)')
 _RE_SPACE    = re.compile(r'\s+')
 
 def _normalize(s: str) -> str:
     s = s.replace('\\n', ' ').replace('\n', ' ')
+    s = s.replace('%%', '%')                 # printf 的字面 % 與 app 顯示一致
     s = _RE_PRINTF.sub('__X__', s)
     s = _RE_PRINTF2.sub('__X__', s)
     s = _RE_BRACE.sub('__X__', s)
@@ -623,11 +660,21 @@ def _normalize(s: str) -> str:
 def build_index(source: Path, base_lang: str, log) -> tuple:
     log(f"🔍 掃描翻譯來源: {source.name}")
     projects: dict = defaultdict(dict)
+    src_pri: dict = {}   # (proj, lang) → 來源優先序（zh-rTW 優先於 zh-rHK）
 
-    def add(proj, lang, kvs):
-        if proj and lang and kvs:
-            if lang in projects[proj]: projects[proj][lang].update(kvs)
-            else: projects[proj][lang] = dict(kvs)
+    def add(proj, lang, kvs, pri=0):
+        if not (proj and lang and kvs):
+            return
+        if lang not in projects[proj]:
+            projects[proj][lang] = dict(kvs)
+            src_pri[(proj, lang)] = pri
+        elif pri >= src_pri.get((proj, lang), 0):
+            projects[proj][lang].update(kvs)
+            src_pri[(proj, lang)] = pri
+        else:
+            # 低優先序來源只補缺，不覆蓋（如 zh-rHK 不覆蓋 zh-rTW）
+            for k, v in kvs.items():
+                projects[proj][lang].setdefault(k, v)
 
     def process_file(proj, fname, raw, folder=""):
         if fname.endswith(".arb"):
@@ -638,7 +685,9 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
             add(proj, lang_from_strings_name(fname), parse_strings(raw))
         elif fname == "strings.xml" and folder:
             lang = lang_from_android_folder(folder)
-            if lang: add(proj, lang, parse_android_xml(raw))
+            if lang:
+                add(proj, lang, parse_android_xml(raw),
+                    pri=1 if folder == "values-zh-rTW" else 0)
 
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as zf:
@@ -648,7 +697,7 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
                 parts = Path(info.filename).parts
                 if len(parts) < 2: continue
                 fname, folder = parts[-1], parts[-2]
-                raw = zf.read(info).decode("utf-8", errors="replace")
+                raw = _decode_bytes(zf.read(info))
                 if fname == "strings.xml":
                     proj = parts[1] if len(parts) >= 7 else parts[0]
                     process_file(proj, fname, raw, folder)
@@ -660,7 +709,7 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
             if not pd_.is_dir(): continue
             for fp in sorted(pd_.rglob("*")):
                 if fp.is_dir(): continue
-                try: raw = fp.read_text("utf-8", errors="replace")
+                try: raw = _decode_bytes(fp.read_bytes())
                 except: continue
                 process_file(pd_.name, fp.name, raw, fp.parent.name)
 
@@ -738,7 +787,12 @@ def build_web_index(source: Path, log) -> tuple:
 
     with zipfile.ZipFile(source) as zf:
         all_names = {Path(n).name: n for n in zf.namelist()}
-        en_data: dict = json.loads(zf.read(all_names["en_US.json"]).decode("utf-8"))
+        try:
+            en_data = json.loads(_decode_bytes(zf.read(all_names["en_US.json"])))
+        except Exception as ex:
+            raise ValueError(f"en_US.json 解析失敗: {ex}")
+        if not isinstance(en_data, dict):
+            raise ValueError("en_US.json 格式錯誤（不是 JSON 物件）")
 
         lang_data: dict = {}   # lang_code → {key: value}
         detected: dict  = {}   # internal_code → lang_code
@@ -748,17 +802,25 @@ def build_web_index(source: Path, log) -> tuple:
             fname = stem + ".json"
             if fname not in all_names: continue
             lc = _WEB_LOCALE_TO_LANG[stem]
-            lang_data[lc] = json.loads(zf.read(all_names[fname]).decode("utf-8"))
+            try:
+                data = json.loads(_decode_bytes(zf.read(all_names[fname])))
+            except Exception:
+                log(f"⚠️  {fname} 解析失敗，跳過該語言")
+                continue
+            if not isinstance(data, dict):
+                log(f"⚠️  {fname} 格式錯誤，跳過該語言")
+                continue
+            lang_data[lc] = data
             detected[code] = lc
 
     # Group keys by EN value (same EN value may map to multiple keys)
     key_groups: dict[str, list] = {}
     for key, en_val in en_data.items():
-        if not en_val.strip(): continue
+        if not isinstance(en_val, str) or not en_val.strip(): continue
         translations: dict = {}
         for lc, kv in lang_data.items():
             val = kv.get(key, "")
-            if val: translations[lc] = val
+            if val and isinstance(val, str): translations[lc] = val
         key_groups.setdefault(en_val, []).append((key, translations))
 
     lookup: dict = {}
@@ -786,7 +848,7 @@ def build_web_index(source: Path, log) -> tuple:
 
 # ── Ignore list loader ────────────────────────────────────────────────────────
 
-def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
+def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> set:
     """
     Parse ignore Excel with columns: Module | ENU翻譯檔字串 | 問題Key | 語言
     語言 column contains comma-separated lang codes (e.g. "HEB, POL, FIL")
@@ -808,6 +870,7 @@ def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
     code_to_lang = {k: v for k, v in (target_langs or {}).items()}
 
     ignore: set = set()
+    unknown_codes: set = set()
     for _, row in df.iterrows():
         module    = str(row.iloc[0]).strip() if pd_.notna(row.iloc[0]) else ""
         key_name  = str(row.iloc[2]).strip() if pd_.notna(row.iloc[2]) else ""
@@ -821,10 +884,14 @@ def load_ignore_list(path: Path, target_langs: dict | None = None) -> set:
             continue
 
         for code in [c.strip() for c in langs_str.split(",")]:
-            lang = code_to_lang.get(code, "")
+            lang = code_to_lang.get(code.upper(), "")
             if lang:
                 ignore.add((module, key_name, lang))
+            elif code:
+                unknown_codes.add(code)
 
+    if unknown_codes and log:
+        log(f"⚠️  Ignore 表含未知語言代碼，已略過: {', '.join(sorted(unknown_codes))}")
     return ignore
 
 
@@ -1136,7 +1203,7 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
 
     for ri, row_vals in enumerate(rows, 2):
         for ci, v in enumerate(row_vals, 1):
-            c = ws.cell(row=ri, column=ci, value=v)
+            c = ws.cell(row=ri, column=ci, value=_xl_safe(v))
             c.font = D_FONT; c.alignment = LEFT; c.border = BORDER
             if ri % 2 == 0:
                 c.fill = _alt_fill
@@ -1162,18 +1229,17 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
 
 
 def _build_key_index(en_idx: dict) -> dict:
-    """Convert EN-grouped index → {key: {'_en': en_val, lang: val, ...}}"""
+    """Convert EN-grouped index → {key: [{'_en': en_val, 'langs': {lang: val}}, ...]}
+    Same key name may exist in multiple modules with different EN strings —
+    keep all variants; compare_xplat pairs them by EN value."""
     key_idx = {}
     for en_val, proj_data in en_idx.items():
         for proj, pt in proj_data.items():
             for key, trans in pt.get('_key_trans', {}).items():
-                if key in key_idx:
-                    continue
-                entry = {'_en': en_val}
-                for lang, val in trans.items():
-                    if val:
-                        entry[lang] = val
-                key_idx[key] = entry
+                entry = {'_en': en_val,
+                         'langs': {lang: val for lang, val in trans.items() if val}}
+                if entry not in key_idx.setdefault(key, []):
+                    key_idx[key].append(entry)
     return key_idx
 
 
@@ -1219,18 +1285,28 @@ def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
 
     log("📊 比對 Key...")
     key_diffs = []
+    n_matched = n_en_mismatch = 0
     for key in sorted(set(a_key) & set(i_key)):
         if cancel.is_set(): return
-        a, i = a_key[key], i_key[key]
-        en   = a.get('_en', i.get('_en', ''))
-        langs = set(a) | set(i)
-        langs.discard('_en')
-        if allowed: langs &= allowed
-        for lc in sorted(langs):
-            va, vi = a.get(lc, ''), i.get(lc, '')
-            if va != vi:
-                key_diffs.append((key, en, lc, va, vi))
-    log(f"   {len(set(a_key) & set(i_key))} 個共同 key，{len(key_diffs)} 個不一致")
+        matched = False
+        for a in a_key[key]:
+            i = next((e for e in i_key[key]
+                      if e['_en'].strip() == a['_en'].strip()), None)
+            if i is None:
+                continue
+            matched = True
+            langs = set(a['langs']) | set(i['langs'])
+            if allowed: langs &= allowed
+            for lc in sorted(langs):
+                va, vi = a['langs'].get(lc, ''), i['langs'].get(lc, '')
+                if va != vi:
+                    key_diffs.append((key, a['_en'], lc, va, vi))
+        if matched: n_matched += 1
+        else:       n_en_mismatch += 1
+    msg = f"   {n_matched} 個共同 key，{len(key_diffs)} 個不一致"
+    if n_en_mismatch:
+        msg += f"（另有 {n_en_mismatch} 個 key 兩平台英文不同，未比對）"
+    log(msg)
 
     log("📊 比對 EN 字串...")
     a_en = _flatten_en_idx(android_idx, allowed)
@@ -1267,7 +1343,7 @@ def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
     for ri, (key, en, lc, va, vi) in enumerate(key_diffs, 2):
         alt = ALT_FILL if ri % 2 == 0 else None
         for ci, val in enumerate([key, en, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
-            c = ws1.cell(ri, ci, val)
+            c = ws1.cell(ri, ci, _xl_safe(val))
             c.alignment, c.border = _LEFT, _BORDER
             if alt: c.fill = alt
         if not va: ws1.cell(ri, 4).fill = RED_FILL
@@ -1285,7 +1361,7 @@ def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
     for ri, (en_val, a_mod, a_key, i_mod, i_key, lc, va, vi) in enumerate(en_diffs, 2):
         alt = ALT_FILL if ri % 2 == 0 else None
         for ci, val in enumerate([en_val, a_mod, a_key, i_mod, i_key, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
-            c = ws2.cell(ri, ci, val)
+            c = ws2.cell(ri, ci, _xl_safe(val))
             c.alignment, c.border = _LEFT, _BORDER
             if alt: c.fill = alt
         if not va: ws2.cell(ri, 7).fill = RED_FILL
@@ -1363,9 +1439,13 @@ def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
     _GRP_FILLS   = [PatternFill("solid", fgColor="FFE3F2FD"),
                     PatternFill("solid", fgColor="FFFFFFFF")]
 
-    _name_rng   = f"$M$3:$M${2 + _MAX_T}"
-    _lang_rng   = f"$O$2:$O${1 + _n_langs}"
-    _data_rng   = f"$P$2:$T${1 + _n_langs}"
+    # 依 _col_off 推導欄位字母（Web 無 Module 欄時整體左移一欄）
+    _name_l     = get_column_letter(_NAME_COL)
+    _lang_l     = get_column_letter(_ASGN_LANG)
+    _name_rng   = f"${_name_l}$3:${_name_l}${2 + _MAX_T}"
+    _lang_rng   = f"${_lang_l}$2:${_lang_l}${1 + _n_langs}"
+    _data_rng   = (f"${get_column_letter(_ASGN_START)}$2:"
+                   f"${get_column_letter(_ASGN_START + _MAX_T - 2)}${1 + _n_langs}")
     # Custom override col (U): manager picks a tester name from dropdown;
     # takes priority over greedy auto-assignment when non-empty.
     _CUSTOM_COL = _ASGN_START + (_MAX_T - 1)        # col U (= 21)
@@ -1398,7 +1478,7 @@ def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
                      if has_module else
                      [_lang, _page, _en, _trans, None, None])
         for _ci, _v in enumerate(_row_vals, 1):
-            _c = ts.cell(row=_r, column=_ci, value=_v)
+            _c = ts.cell(row=_r, column=_ci, value=_xl_safe(_v))
             _c.font = Font(name="Microsoft JhengHei UI", size=10)
             _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
             _c.border = BORDER
@@ -1414,7 +1494,7 @@ def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
             f'=IFERROR('
             f'IF(INDEX({_custom_rng},MATCH(A{_r},{_lang_rng},0))<>"",'
             f'INDEX({_custom_rng},MATCH(A{_r},{_lang_rng},0)),'
-            f'INDEX({_name_rng},INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),MAX(1,MIN(5,$M$2-1)))'
+            f'INDEX({_name_rng},INDEX({_data_rng},MATCH(A{_r},{_lang_rng},0),MAX(1,MIN(5,${_name_l}$2-1)))'
             f')),"")'
         )
         _tc.font = Font(name="Microsoft JhengHei UI", size=10)
@@ -1596,7 +1676,7 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         _issue_ci = 5 if has_module else 4
         _key_ci   = 3 if has_module else 2
         for ci, v in enumerate(_row_vals, 1):
-            c = rpt.cell(row=ri, column=ci, value=v or None)
+            c = rpt.cell(row=ri, column=ci, value=_xl_safe(v) or None)
             c.border = row_border
             if ci == _issue_ci:
                 c.fill = PatternFill("solid", fgColor=ISSUE_COLORS.get(issue, "FFFFFF"))
@@ -1673,6 +1753,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     for _, row in df.iterrows():
         en_raw = str(row[en_col]).strip()   if pd_.notna(row[en_col])   else ""
         pg     = str(row[page_col]).strip() if pd_.notna(row[page_col]) else ""
+        if not en_raw:
+            continue    # EN 欄空白的列（只填 Page）不當成查詢
         if '*' in en_raw:
             hits = sorted(k for k in index if _fnmatch.fnmatch(k.lower(), en_raw.lower()))
             if hits:
@@ -1826,7 +1908,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
 
         valid    = {l: _visual_len(v) for l, v in trans.items()
                     if l in sorted_langs and v and not is_garbled(v)
-                    and l != "en" and v.strip() != en_val.strip()}
+                    and l != "en" and v.strip() != en_val.strip()
+                    and (not enu_val or v.strip() != enu_val.strip())}
         max_len  = max(valid.values()) if valid else 0
         max_langs = {l for l, n in valid.items() if n == max_len}
 
@@ -1900,10 +1983,10 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                     c.fill, c.font = RED, D_FONT
             elif lang in max_langs:
                 c.fill, c.font = YELLOW, B_FONT
-                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFD700"))
+                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val), "FFD700"))
             elif lang in second_langs:
                 c.fill, c.font = YELLOW2, B_FONT
-                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val) or val, "FFF176"))
+                test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val), "FFF176"))
             else:
                 c.font = D_FONT
 
@@ -1981,6 +2064,7 @@ class App(tk.Tk):
         self._scan_out_path = None
         self._convert_in_path = self._convert_out_path = None
         self._cancel_event = threading.Event()
+        self._busy = False   # 有 worker 執行中 — 鎖模式/App 切換與其他 Run
         self._ignore_var = tk.StringVar(value="未設定（可選）")
         self._web_target_langs: dict = {}   # populated when Web zip is loaded
 
@@ -2055,7 +2139,8 @@ class App(tk.Tk):
         _try_set(app_cfg.get("zip"),    self._zip_var,    "_zip_path")
         _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
         _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
-        _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+        if app != "Web":
+            _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
 
         scan_out = app_cfg.get("scan_out")
         if scan_out and Path(scan_out).parent.exists():
@@ -2241,14 +2326,16 @@ class App(tk.Tk):
         self._ignore_val.grid(row=3, column=1, sticky="ew", padx=(4, 0))
         ig_btns = tk.Frame(fp, bg=BG)
         ig_btns.grid(row=3, column=2, padx=(4, 0))
-        tk.Button(ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
+        self._ignore_btn_pick = tk.Button(ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
                   bg="#45475a", fg="white", activebackground="#3d59a1",
                   activeforeground="white", relief="flat", padx=8, pady=2,
-                  cursor="hand2", command=self._pick_ignore).pack(side="left", padx=(0, 3))
-        tk.Button(ig_btns, text="清除", font=("Microsoft JhengHei UI", 10),
+                  cursor="hand2", command=self._pick_ignore)
+        self._ignore_btn_pick.pack(side="left", padx=(0, 3))
+        self._ignore_btn_clear = tk.Button(ig_btns, text="清除", font=("Microsoft JhengHei UI", 10),
                   bg="#2d2030", fg="#f38ba8", activebackground="#3a2535",
                   activeforeground="white", relief="flat", padx=8, pady=2,
-                  cursor="hand2", command=self._clear_ignore).pack(side="left")
+                  cursor="hand2", command=self._clear_ignore)
+        self._ignore_btn_clear.pack(side="left")
 
         # Tooltips for standard file rows
         self._bind_row_tooltip(self._zip_row,   lambda: str(self._zip_path)    if self._zip_path    else None)
@@ -2609,25 +2696,36 @@ class App(tk.Tk):
                 text="  ".join(cfg.keys()) if cfg else "（全部語言）"
             )
 
-        # Disable/enable convert mode for Web
+        # Disable/enable convert + xplat modes for Web
         if hasattr(self, '_mode_buttons'):
             is_web = (app_name == "Web")
-            _conv_btn = self._mode_buttons.get("convert")
-            if _conv_btn:
+            for _mname in ("convert", "xplat"):
+                _mb = self._mode_buttons.get(_mname)
+                if not _mb:
+                    continue
                 if is_web:
-                    if self._mode_var.get() == "convert":
+                    if self._mode_var.get() == _mname:
                         self._set_mode("excel")   # switch mode first (re-styles all btns)
                     # Use color + no-op command (state="disabled" ignores bg on flat btns)
-                    _conv_btn.configure(
+                    _mb.configure(
                         bg="#1e1e2e", fg="#3d3d55", cursor="",
                         activebackground="#1e1e2e", activeforeground="#3d3d55",
                         command=lambda: None)
                 else:
-                    _conv_btn.configure(
+                    _mb.configure(
                         cursor="hand2",
-                        command=lambda: self._set_mode("convert"))
-                    # Re-apply proper coloring via _set_mode
-                    self._set_mode(self._mode_var.get())
+                        command=lambda m=_mname: self._set_mode(m))
+            if not is_web:
+                # Re-apply proper coloring via _set_mode
+                self._set_mode(self._mode_var.get())
+            # Web 不支援 Ignore（Web 無 Module 概念，ignore 表無法比對）
+            if hasattr(self, '_ignore_btn_pick'):
+                _ig_state = "disabled" if is_web else "normal"
+                self._ignore_btn_pick.configure(state=_ig_state)
+                self._ignore_btn_clear.configure(state=_ig_state)
+                if is_web:
+                    self._ignore_path = None
+                    self._ignore_var.set("Web 不支援")
 
         if not init:
             # Load this app's saved paths (don't clear — restore from config)
@@ -2657,7 +2755,10 @@ class App(tk.Tk):
             _try_set(app_cfg.get("zip"),    self._zip_var,    "_zip_path")
             _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
             _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
-            _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+            if app_name != "Web":
+                _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+            else:
+                self._ignore_var.set("Web 不支援")
 
             scan_out = app_cfg.get("scan_out")
             if scan_out and Path(scan_out).parent.exists():
@@ -2801,6 +2902,10 @@ class App(tk.Tk):
     def _clear_ignore(self):
         self._ignore_path = None
         self._ignore_var.set("未設定（可選）")
+        # _save_app_paths 只寫非空值，須明確刪除舊 key 否則重開後復活
+        app = self._app_var.get()
+        if app in self._cfg:
+            self._cfg[app].pop("ignore", None)
         self._save_app_paths()
 
     # ── Index loader (shared by _run, _run_scan, _quick_lookup) ──────────────
@@ -2825,11 +2930,21 @@ class App(tk.Tk):
 
         if index_path.exists():
             self._log("📂 發現快取索引，直接載入...")
-            raw        = json.loads(index_path.read_text("utf-8"))
-            index      = {r["en"]: r["projects"] for r in raw}
-            norm_index = {_normalize(k): k for k in index}
-            self._log(f"✅ 索引載入: {len(index)} 個字串")
-            return index, norm_index
+            try:
+                raw   = json.loads(index_path.read_text("utf-8"))
+                index = {r["en"]: r["projects"] for r in raw}
+                # first-wins，與 build_index 的衝突策略一致
+                norm_index = {}
+                for k in index:
+                    nk = _normalize(k)
+                    if nk not in norm_index:
+                        norm_index[nk] = k
+                self._log(f"✅ 索引載入: {len(index)} 個字串")
+                return index, norm_index
+            except Exception:
+                self._log("⚠️  快取損壞，刪除後重新建立索引...")
+                try: index_path.unlink()
+                except OSError: pass
 
         if web_zip:
             index, norm_index, _ = build_web_index(zip_path, self._log)
@@ -2943,6 +3058,7 @@ class App(tk.Tk):
         return None   # cancel
 
     def _run_convert(self):
+        if self._busy: return
         if not self._convert_in_path:
             messagebox.showwarning("提示", "請先選取語言掃描報告"); return
 
@@ -2962,6 +3078,7 @@ class App(tk.Tk):
             self._convert_out_var.set(self._fmt_name(out_path.name))
             self._save_app_paths()
 
+        self._set_busy(True)
         self._cancel_event.clear()
         self._convert_run_btn.configure(state="disabled")
         self._convert_run_btn.pack_forget()
@@ -2979,18 +3096,12 @@ class App(tk.Tk):
             try:
                 n = convert_scan_to_ignore(in_path, out_path, self._log)
                 self._log(f"\n🎉 完成！共 {n} 筆，已儲存至:\n   {out_path}")
-                if messagebox.askyesno("完成", f"Ignore Excel 已產生！\n\n{out_path}\n\n是否立即開啟？"):
-                    import os
-                    if sys.platform == "win32":
-                        os.startfile(str(out_path))
-                    else:
-                        import subprocess
-                        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(out_path)])
+                self.after(0, self._notify_done, out_path, "Ignore Excel 已產生！")
             except Exception as ex:
                 import traceback
                 self._log(f"❌ 發生錯誤: {ex}", "err")
                 self._log(traceback.format_exc(), "err")
-                messagebox.showerror("錯誤", str(ex))
+                self.after(0, self._notify_error, str(ex))
             finally:
                 self.after(0, self._finish_run, self._convert_run_btn)
 
@@ -2999,6 +3110,7 @@ class App(tk.Tk):
     # ── Scan run ─────────────────────────────────────────────────────────────
 
     def _run_scan(self):
+        if self._busy: return
         if not self._zip_path:
             messagebox.showwarning("提示", "請先選取翻譯 Zip 檔"); return
 
@@ -3021,6 +3133,7 @@ class App(tk.Tk):
             self._scan_out_var.set(self._fmt_name(out_path.name))
             self._save_app_paths()
 
+        self._set_busy(True)
         self._cancel_event.clear()
         self._scan_run_btn.configure(state="disabled")
         self._scan_run_btn.pack_forget()
@@ -3048,7 +3161,7 @@ class App(tk.Tk):
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
-                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs)
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_scan_report(index, out_path, self._log, selected,
@@ -3057,17 +3170,13 @@ class App(tk.Tk):
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！報告已儲存至:\n   {out_path}")
 
-                if messagebox.askyesno("完成", f"掃描報告已產生！\n\n{out_path}\n\n是否立即開啟？"):
-                    import subprocess, os
-                    if sys.platform == "win32":   os.startfile(str(out_path))
-                    elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
-                    else:                          subprocess.Popen(["xdg-open", str(out_path)])
+                self.after(0, self._notify_done, out_path, "掃描報告已產生！")
 
             except Exception as ex:
                 import traceback
                 self._log(f"❌ 發生錯誤: {ex}", "err")
                 self._log(traceback.format_exc(), "err")
-                messagebox.showerror("錯誤", str(ex))
+                self.after(0, self._notify_error, str(ex))
             finally:
                 self.after(0, self._finish_run, self._scan_run_btn)
 
@@ -3135,6 +3244,7 @@ class App(tk.Tk):
             self._save_app_paths()
 
     def _run_diff(self):
+        if self._busy: return
         if not self._zip_old_path:
             messagebox.showwarning("缺少檔案", "請選取舊版 Zip 檔"); return
         if not self._zip_path:
@@ -3154,6 +3264,7 @@ class App(tk.Tk):
             self._diff_out_var.set(self._fmt_name(resolved.name))
             self._save_app_paths()
 
+        self._set_busy(True)
         self._cancel_event.clear()
         self._diff_run_btn.configure(state="disabled")
         self._diff_run_btn.pack_forget()
@@ -3185,16 +3296,12 @@ class App(tk.Tk):
                              has_module=(self._app_var.get() != "Web"))
                 if cancel.is_set(): return
                 self._log(f"\n🎉 完成！已儲存至:\n   {out_path}")
-                if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
-                    import subprocess
-                    if sys.platform == "win32":    os.startfile(str(out_path))
-                    elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
-                    else:                          subprocess.Popen(["xdg-open", str(out_path)])
+                self.after(0, self._notify_done, out_path, "比對完成！")
             except Exception as e:
                 import traceback
                 self._log(f"❌ 錯誤: {e}", "err")
                 self._log(traceback.format_exc(), "err")
-                messagebox.showerror("錯誤", str(e))
+                self.after(0, self._notify_error, str(e))
             finally:
                 self.after(0, self._finish_run, self._diff_run_btn)
 
@@ -3226,6 +3333,7 @@ class App(tk.Tk):
             self._save_app_paths()
 
     def _run_xplat(self):
+        if self._busy: return
         if not self._xplat_android_path:
             messagebox.showwarning("缺少檔案", "請選取 Android Zip 檔"); return
         if not self._xplat_ios_path:
@@ -3243,6 +3351,7 @@ class App(tk.Tk):
             self._xplat_out_var.set(self._fmt_name(resolved.name))
             self._save_app_paths()
 
+        self._set_busy(True)
         self._cancel_event.clear()
         self._xplat_run_btn.configure(state="disabled")
         self._xplat_run_btn.pack_forget()
@@ -3274,16 +3383,12 @@ class App(tk.Tk):
                 compare_xplat(android_idx, ios_idx, target_langs, out_path, self._log, cancel)
                 if cancel.is_set(): return
                 self._log(f"\n🎉 完成！已儲存至:\n   {out_path}")
-                if messagebox.askyesno("完成", f"比對完成！\n\n{out_path}\n\n是否立即開啟？"):
-                    import subprocess
-                    if sys.platform == "win32":    os.startfile(str(out_path))
-                    elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
-                    else:                          subprocess.Popen(["xdg-open", str(out_path)])
+                self.after(0, self._notify_done, out_path, "比對完成！")
             except Exception as e:
                 import traceback
                 self._log(f"❌ 錯誤: {e}", "err")
                 self._log(traceback.format_exc(), "err")
-                messagebox.showerror("錯誤", str(e))
+                self.after(0, self._notify_error, str(e))
             finally:
                 self.after(0, self._finish_run, self._xplat_run_btn)
 
@@ -3291,11 +3396,32 @@ class App(tk.Tk):
 
     # ── Log ──────────────────────────────────────────────────────────────────
 
+    # tkinter 只能在主執行緒開對話框 — worker 一律經 self.after 呼叫這兩個
+    def _notify_done(self, out_path, msg):
+        if messagebox.askyesno("完成", f"{msg}\n\n{out_path}\n\n是否立即開啟？"):
+            import subprocess
+            if sys.platform == "win32":   os.startfile(str(out_path))
+            elif sys.platform == "darwin": subprocess.Popen(["open", str(out_path)])
+            else:                          subprocess.Popen(["xdg-open", str(out_path)])
+
+    def _notify_error(self, msg):
+        messagebox.showerror("錯誤", msg)
+
     def _cancel_run(self):
         self._cancel_event.set()
         self._cancel_btn.configure(state="disabled", text="■  取消中…")
 
+    def _set_busy(self, busy: bool):
+        """執行期間鎖住模式/App 按鈕，避免並發 worker 互踩狀態。"""
+        self._busy = busy
+        state = "disabled" if busy else "normal"
+        for b in getattr(self, '_mode_buttons', {}).values():
+            b.configure(state=state)
+        for b in getattr(self, '_app_buttons', {}).values():
+            b.configure(state=state)
+
     def _finish_run(self, run_btn):
+        self._set_busy(False)
         self._progress.stop()
         self._progress.configure(mode="indeterminate", value=0)
         self._progress_label.configure(text="")
@@ -3341,7 +3467,10 @@ class App(tk.Tk):
             messagebox.showwarning("提示", "請輸入要查詢的英文字串"); return
         if not self._zip_path:
             messagebox.showwarning("提示", "請先選取翻譯 Zip 檔"); return
+        if self._busy:
+            self._log_ql("⚠️  有任務執行中，請稍候再查詢", "err"); return
 
+        self._set_busy(True)
         self._ql_btn.configure(state="disabled")
         self._progress.start(12)
         def worker():
@@ -3370,7 +3499,7 @@ class App(tk.Tk):
                                 for proj, pt in sorted(proj_dict.items()):
                                     rows = sorted(
                                         ((lang, val) for lang, val in pt.items()
-                                         if not lang.startswith('_') and (not allowed or lang in allowed)),
+                                         if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
                                         key=lambda kv: _visual_len(kv[1]), reverse=True
                                     )
                                     for lang, val in rows:
@@ -3403,7 +3532,7 @@ class App(tk.Tk):
                     for proj, pt in sorted(rec.items()):
                         rows = sorted(
                             ((lang, val) for lang, val in pt.items()
-                             if not lang.startswith('_') and (not allowed or lang in allowed)),
+                             if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
                             key=lambda kv: _visual_len(kv[1]), reverse=True
                         )
                         for lang, val in rows:
@@ -3421,13 +3550,15 @@ class App(tk.Tk):
                 self._log_ql(f"❌ 查詢錯誤: {ex}", "err")
             finally:
                 self.after(0, lambda: (self._progress.stop(),
-                                       self._ql_btn.configure(state="normal")))
+                                       self._ql_btn.configure(state="normal"),
+                                       self._set_busy(False)))
 
         threading.Thread(target=worker, daemon=True).start()
 
     # ── Run ──────────────────────────────────────────────────────────────────
 
     def _run(self):
+        if self._busy: return
         if not self._zip_path:
             messagebox.showwarning("提示", "請先選取翻譯 Zip 檔"); return
         if not self._excel_path:
@@ -3444,6 +3575,7 @@ class App(tk.Tk):
             self._out_var.set(self._fmt_name(resolved.name))
             self._save_app_paths()
 
+        self._set_busy(True)
         self._cancel_event.clear()
         self._run_btn.configure(state="disabled")
         self._run_btn.pack_forget()
@@ -3474,7 +3606,7 @@ class App(tk.Tk):
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
-                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs)
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_excel(index, norm_index, excel_path, out_path, self._log,
@@ -3483,20 +3615,13 @@ class App(tk.Tk):
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！檔案已儲存至:\n   {out_path}")
 
-                if messagebox.askyesno("完成", f"Excel 已產生！\n\n{out_path}\n\n是否立即開啟？"):
-                    import subprocess, os
-                    if sys.platform == "win32":
-                        os.startfile(str(out_path))
-                    elif sys.platform == "darwin":
-                        subprocess.Popen(["open", str(out_path)])
-                    else:
-                        subprocess.Popen(["xdg-open", str(out_path)])
+                self.after(0, self._notify_done, out_path, "Excel 已產生！")
 
             except Exception as ex:
                 import traceback
                 self._log(f"❌ 發生錯誤: {ex}", "err")
                 self._log(traceback.format_exc(), "err")
-                messagebox.showerror("錯誤", str(ex))
+                self.after(0, self._notify_error, str(ex))
             finally:
                 self.after(0, self._finish_run, self._run_btn)
 
