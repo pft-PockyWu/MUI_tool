@@ -19,6 +19,8 @@ v2.5
 ────────────────────────────────────────
 新功能
   • YCVB 新增 HIN 印地語、UKR 烏克蘭語、POL 波蘭語、TAM 泰米爾語、RON 羅馬尼亞語、AFR 南非荷蘭語、ELL 希臘語、SWE 瑞典語（共 26 語言）
+  • YMK 新增 UKR 烏克蘭語、BUL 保加利亞語（共 25 語言）
+  • YCE 新增 AFR 南非荷蘭語（共 22 語言）
 
 ────────────────────────────────────────
 v2.4
@@ -305,6 +307,8 @@ APP_CONFIGS: dict[str, dict | None] = {
         "RON": "ro",
         "ELL": "el",
         "HUN": "hu",
+        "UKR": "uk",
+        "BUL": "bg",
     },
 
     "YCE": {
@@ -329,6 +333,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "ARA": "ar",
         "DAN": "da",
         "POL": "pl",
+        "AFR": "af",
     },
 
     "YCP": {
