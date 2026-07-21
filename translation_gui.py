@@ -21,6 +21,7 @@ v2.5
   • YCVB 新增 HIN 印地語、UKR 烏克蘭語、POL 波蘭語、TAM 泰米爾語、RON 羅馬尼亞語、AFR 南非荷蘭語、ELL 希臘語、SWE 瑞典語（共 26 語言）
   • YMK 新增 UKR 烏克蘭語、BUL 保加利亞語（共 25 語言）
   • YCE 新增 AFR 南非荷蘭語（共 22 語言）
+  • YCP 新增 SWE 瑞典語、HRV 克羅埃西亞語、HUN 匈牙利語、DAN 丹麥語（v2.3 曾移除，本次重新加入，共 27 語言）
 
 ────────────────────────────────────────
 v2.4
@@ -360,6 +361,10 @@ APP_CONFIGS: dict[str, dict | None] = {
         "UKR": "uk",
         "BUL": "bg",
         "GRN": "gn",
+        "SWE": "sv",
+        "HRV": "hr",
+        "HUN": "hu",
+        "DAN": "da",
     },
 
     "YCVB": {
