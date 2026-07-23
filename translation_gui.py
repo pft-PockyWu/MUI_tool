@@ -27,6 +27,7 @@ Bug 修正
   • 報告輸出：字串內嵌的換行符號（\\n）改以字面顯示，不再轉成真正的換行
     → 避免無法分辨「一個字串內含換行」跟「多個不同 key/字串換行顯示」
     → 多個 key 共用同一 EN 字串時，仍以真正換行分行顯示（未受影響）
+  • Ignore 表：上述字面 \\n 顯示導致含換行符號的 Key 讀回時比對不到、Ignore 失效 → 讀取 Ignore 表時還原成真正換行再比對
 
 ────────────────────────────────────────
 v2.4
@@ -653,6 +654,13 @@ def _esc_nl(s: str) -> str:
     if not isinstance(s, str): return s
     return s.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
 
+def _unesc_nl(s: str) -> str:
+    """Inverse of _esc_nl(): turn literal \\n / \\t / \\r escapes back into real
+    control characters, so keys read back from an Ignore Table match the
+    (always real-newline) keys built from the translation source."""
+    if not isinstance(s, str): return s
+    return s.replace('\\r', '\r').replace('\\t', '\t').replace('\\n', '\n')
+
 def is_garbled(val: str) -> bool:
     if not val or not val.strip(): return True
     if GARBLED_RE.search(val): return True
@@ -909,7 +917,7 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> 
     unknown_codes: set = set()
     for _, row in df.iterrows():
         module    = str(row.iloc[0]).strip() if pd_.notna(row.iloc[0]) else ""
-        key_name  = str(row.iloc[2]).strip() if pd_.notna(row.iloc[2]) else ""
+        key_name  = _unesc_nl(str(row.iloc[2]).strip()) if pd_.notna(row.iloc[2]) else ""
         langs_str = str(row.iloc[3]).strip() if pd_.notna(row.iloc[3]) else ""
 
         if not module or not key_name or not langs_str:
