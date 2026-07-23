@@ -23,6 +23,11 @@ v2.5
   • YCE 新增 AFR 南非荷蘭語（共 22 語言）
   • YCP 新增 SWE 瑞典語、HRV 克羅埃西亞語、HUN 匈牙利語、DAN 丹麥語（v2.3 曾移除，本次重新加入，共 27 語言）
 
+Bug 修正
+  • 報告輸出：字串內嵌的換行符號（\\n）改以字面顯示，不再轉成真正的換行
+    → 避免無法分辨「一個字串內含換行」跟「多個不同 key/字串換行顯示」
+    → 多個 key 共用同一 EN 字串時，仍以真正換行分行顯示（未受影響）
+
 ────────────────────────────────────────
 v2.4
 ────────────────────────────────────────
@@ -641,6 +646,13 @@ def _xl_safe(s: str) -> str:
     if not isinstance(s, str): return s
     return _XL_ILLEGAL_RE.sub('', s)
 
+def _esc_nl(s: str) -> str:
+    """Show a string's own embedded \\n / \\t / \\r as literal escapes, so a
+    single string with a real newline isn't visually indistinguishable from
+    several different strings wrapped onto separate lines in the same cell."""
+    if not isinstance(s, str): return s
+    return s.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+
 def is_garbled(val: str) -> bool:
     if not val or not val.strip(): return True
     if GARBLED_RE.search(val): return True
@@ -1084,7 +1096,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
 
             if not val or is_garbled(val):
                 issue    = "未翻譯 / 空白"
-                keys_str = "\n".join(all_keys)
+                keys_str = "\n".join(_esc_nl(k) for k in all_keys)
             elif enu_val and val.strip() == enu_val.strip():
                 # Check ignore: pass if ALL keys for this string are in ignore_set
                 if ignore_set and all(
@@ -1092,10 +1104,10 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                 ):
                     continue
                 issue    = "與英文翻譯檔相同"
-                keys_str = "\n".join(all_keys)
+                keys_str = "\n".join(_esc_nl(k) for k in all_keys)
             elif missing_keys:
                 issue    = "未翻譯 / 空白"
-                keys_str = "\n".join(missing_keys)
+                keys_str = "\n".join(_esc_nl(k) for k in missing_keys)
             else:
                 continue
 
@@ -1149,9 +1161,9 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
         rpt.row_dimensions[ri].height = row_h
 
-        _row_vals = ([module, enu_val, keys_str, ", ".join(langs_list), issue]
+        _row_vals = ([module, _esc_nl(enu_val), keys_str, ", ".join(langs_list), issue]
                      if has_module else
-                     [enu_val, keys_str, ", ".join(langs_list), issue])
+                     [_esc_nl(enu_val), keys_str, ", ".join(langs_list), issue])
         _issue_ci = 5 if has_module else 4
         _key_ci   = 3 if has_module else 2
         for ci, v in enumerate(_row_vals, 1):
@@ -1227,7 +1239,7 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
 
     for ri, row_vals in enumerate(rows, 2):
         for ci, v in enumerate(row_vals, 1):
-            c = ws.cell(row=ri, column=ci, value=_xl_safe(v))
+            c = ws.cell(row=ri, column=ci, value=_xl_safe(_esc_nl(v)))
             c.font = D_FONT; c.alignment = LEFT; c.border = BORDER
             if ri % 2 == 0:
                 c.fill = _alt_fill
@@ -1367,7 +1379,7 @@ def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
     for ri, (key, en, lc, va, vi) in enumerate(key_diffs, 2):
         alt = ALT_FILL if ri % 2 == 0 else None
         for ci, val in enumerate([key, en, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
-            c = ws1.cell(ri, ci, _xl_safe(val))
+            c = ws1.cell(ri, ci, _xl_safe(_esc_nl(val)))
             c.alignment, c.border = _LEFT, _BORDER
             if alt: c.fill = alt
         if not va: ws1.cell(ri, 4).fill = RED_FILL
@@ -1385,7 +1397,7 @@ def compare_xplat(android_idx, ios_idx, target_langs, out_path, log, cancel):
     for ri, (en_val, a_mod, a_key, i_mod, i_key, lc, va, vi) in enumerate(en_diffs, 2):
         alt = ALT_FILL if ri % 2 == 0 else None
         for ci, val in enumerate([en_val, a_mod, a_key, i_mod, i_key, lang_disp(lc), va or "（未翻譯）", vi or "（未翻譯）"], 1):
-            c = ws2.cell(ri, ci, _xl_safe(val))
+            c = ws2.cell(ri, ci, _xl_safe(_esc_nl(val)))
             c.alignment, c.border = _LEFT, _BORDER
             if alt: c.fill = alt
         if not va: ws2.cell(ri, 7).fill = RED_FILL
@@ -1502,7 +1514,7 @@ def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
                      if has_module else
                      [_lang, _page, _en, _trans, None, None])
         for _ci, _v in enumerate(_row_vals, 1):
-            _c = ts.cell(row=_r, column=_ci, value=_xl_safe(_v))
+            _c = ts.cell(row=_r, column=_ci, value=_xl_safe(_esc_nl(_v)))
             _c.font = Font(name="Microsoft JhengHei UI", size=10)
             _c.alignment = _LANG_ALIGN if _ci == 1 else LEFT
             _c.border = BORDER
@@ -1655,13 +1667,13 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
             label = lang_label.get(lang, lang)
 
             if not val or is_garbled(val):
-                issue = "未翻譯 / 空白"; keys_str = key_name
+                issue = "未翻譯 / 空白"; keys_str = _esc_nl(key_name)
             elif enu_val and val.strip() == enu_val.strip():
                 if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
                     continue
-                issue = "與英文翻譯檔相同"; keys_str = key_name
+                issue = "與英文翻譯檔相同"; keys_str = _esc_nl(key_name)
             elif lang in key_missing_langs:
-                issue = "未翻譯 / 空白"; keys_str = key_name
+                issue = "未翻譯 / 空白"; keys_str = _esc_nl(key_name)
             else:
                 continue
 
@@ -1694,9 +1706,9 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         row_h = max(15, len(keys_str.split("\n")) * 14) if keys_str else 15
         rpt.row_dimensions[ri].height = row_h
 
-        _row_vals = ([module, enu_val, keys_str, ", ".join(langs_list), issue]
+        _row_vals = ([module, _esc_nl(enu_val), keys_str, ", ".join(langs_list), issue]
                      if has_module else
-                     [enu_val, keys_str, ", ".join(langs_list), issue])
+                     [_esc_nl(enu_val), keys_str, ", ".join(langs_list), issue])
         _issue_ci = 5 if has_module else 4
         _key_ci   = 3 if has_module else 2
         for ci, v in enumerate(_row_vals, 1):
@@ -1963,7 +1975,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             pass
 
         # EN Base — dim on repeated rows
-        c = ws.cell(row=ri, column=_en_ci, value=_xl_safe(en_val) if is_first else None)
+        c = ws.cell(row=ri, column=_en_ci, value=_xl_safe(_esc_nl(en_val)) if is_first else None)
         if not has_module and not_found and is_first:
             c.fill, c.font, c.alignment, c.border = NF_FILL, NF_FONT, LEFT, border
         if rd.get("fuzzy") and is_first:
@@ -1980,7 +1992,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.alignment, c.border = LEFT, border
 
         # Key col
-        c = ws.cell(row=ri, column=_key_ci, value=_xl_safe(key_name) or None)
+        c = ws.cell(row=ri, column=_key_ci, value=_xl_safe(_esc_nl(key_name)) or None)
         c.fill   = KEY_COL_FILL
         c.font = Font(name="Microsoft JhengHei UI", size=10)
         c.alignment = LEFT
@@ -1992,7 +2004,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             is_base = (lang == "en")
             if is_base:
                 val = enu_val
-            c = ws.cell(row=ri, column=ci, value=_xl_safe(val) or None)
+            c = ws.cell(row=ri, column=ci, value=_xl_safe(_esc_nl(val)) or None)
             c.alignment, c.border = LEFT, border
             if not val or is_garbled(val):
                 c.fill, c.font = RED, D_FONT
