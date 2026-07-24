@@ -10,11 +10,26 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.5.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.6.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.6
+────────────────────────────────────────
+新功能
+  • 新增字數上限檢查：讀取翻譯來源 module 內的 spec.json（{key: {count, lines}}），
+    翻譯（含 ENU 本身）視覺字數超過 count 時，於「翻譯問題報告」/「語言掃描報告」新增
+    「超過字數上限」分類（藍底）。目前僅檢查 count，lines（行數）暫不檢查
+    → 快速查詢同步支援：超過 count 時在該行末顯示 ⚠️超過字數上限(上限值)
+    → 翻譯對照 sheet 同步支援：Key(s) 欄後新增「字數上限」欄，顯示 count（有 lines 設定時
+      一併顯示，如「16（1行）」，僅供參考不納入判斷）；有設定上限的 key，各語言翻譯
+      後方加註目前字數，超過上限時該格文字改粉紅色粗體（不影響原本的紅底/黃底判斷）
+
+Bug 修正
+  • 說明頁色彩圖例：「與英文翻譯檔相同」列實際填色跟報告不一致（橘色 vs 報告實際的黃色）→ 修正對齊
+
+────────────────────────────────────────
 v2.5
 ────────────────────────────────────────
 新功能
@@ -682,6 +697,33 @@ def _visual_len(s: str) -> int:
         total += 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
     return total
 
+def _spec_limit(spec: dict, key: str):
+    """Max char count for `key` from that module's spec.json, or None if unset."""
+    entry = (spec or {}).get(key)
+    if isinstance(entry, dict):
+        count = entry.get("count")
+        if isinstance(count, (int, float)) and count > 0:
+            return int(count)
+    return None
+
+def _spec_lines(spec: dict, key: str):
+    """Max line count for `key` from that module's spec.json, or None if unset. Display only — not enforced."""
+    entry = (spec or {}).get(key)
+    if isinstance(entry, dict):
+        lines = entry.get("lines")
+        if isinstance(lines, (int, float)) and lines > 0:
+            return int(lines)
+    return None
+
+def _len_flag(all_keys: list, spec: dict, val: str) -> str:
+    """Compact 快速查詢 marker when val's visual length exceeds any key's spec.json limit."""
+    limits = []
+    for k in all_keys:
+        lim = _spec_limit(spec, k)
+        if lim is not None and _visual_len(val) > lim:
+            limits.append(lim)
+    return f"  ⚠️超過字數上限({min(limits)})" if limits else ""
+
 
 _RE_PRINTF   = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
 _RE_PRINTF2  = re.compile(r'%[0-9.]*[@disfeEgGuoxXld]+')
@@ -707,6 +749,7 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
     log(f"🔍 掃描翻譯來源: {source.name}")
     projects: dict = defaultdict(dict)
     src_pri: dict = {}   # (proj, lang) → 來源優先序（zh-rTW 優先於 zh-rHK）
+    proj_specs: dict = {}   # proj → {key: {"count": int, "lines": int}} from spec.json
 
     def add(proj, lang, kvs, pri=0):
         if not (proj and lang and kvs):
@@ -734,6 +777,13 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
             if lang:
                 add(proj, lang, parse_android_xml(raw),
                     pri=1 if folder == "values-zh-rTW" else 0)
+        elif fname == "spec.json":
+            try:
+                spec = json.loads(raw)
+                if isinstance(spec, dict):
+                    proj_specs[proj] = spec
+            except Exception:
+                pass
 
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as zf:
@@ -809,6 +859,7 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
             best["_key_missing"] = key_missing
             best["_all_keys"]    = [k for k, _ in key_list]
             best["_key_trans"]   = {k: dict(pt) for k, pt in key_list}  # per-key translations
+            best["_spec"]        = proj_specs.get(proj, {})  # key → {"count", "lines"} from spec.json
             lookup.setdefault(en_val, {})[proj] = best
 
     norm_index: dict = {}
@@ -1077,6 +1128,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     Output: one report sheet grouped by Module.
     """
     lang_label = {v: k for k, v in target_langs.items()} if target_langs else {}
+    LEN_ISSUE = "超過字數上限"
 
     log(f"🔎 掃描語言: {[lang_label.get(l, l) for l in scan_langs]}")
 
@@ -1097,6 +1149,40 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         enu_val     = trans.get("en", "")
         key_missing = trans.get("_key_missing", {})
         all_keys    = trans.get("_all_keys", [])
+        spec        = trans.get("_spec", {})
+
+        # Char-count limit check (spec.json) — independent of the checks below.
+        # Per-key granularity: sibling keys sharing one EN string can have different limits.
+        key_limits = {}
+        for k in all_keys:
+            lim = _spec_limit(spec, k)
+            if lim is not None:
+                key_limits[k] = lim
+        if key_limits:
+            en_over_keys = [k for k, lim in key_limits.items()
+                            if enu_val and _visual_len(enu_val) > lim]
+            if en_over_keys:
+                len_keys_str = "\n".join(_esc_nl(k) for k in en_over_keys)
+                len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
+                               else (enu_val, LEN_ISSUE, len_keys_str))
+                bucket = groups.setdefault(len_grp_key, [])
+                if "ENU" not in bucket:
+                    bucket.append("ENU")
+
+            for lang in scan_langs:
+                if lang == "en": continue
+                val = trans.get(lang, "")
+                if not val or is_garbled(val):
+                    continue
+                over_keys = [k for k, lim in key_limits.items() if _visual_len(val) > lim]
+                if over_keys:
+                    label = lang_label.get(lang, lang)
+                    len_keys_str = "\n".join(_esc_nl(k) for k in over_keys)
+                    len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
+                                   else (enu_val, LEN_ISSUE, len_keys_str))
+                    bucket = groups.setdefault(len_grp_key, [])
+                    if label not in bucket:
+                        bucket.append(label)
 
         for lang in scan_langs:
             if lang == "en": continue
@@ -1136,6 +1222,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     ISSUE_COLORS = {
         "未翻譯 / 空白":    "FF6B6B",
         "與英文翻譯檔相同": "FFD740",
+        LEN_ISSUE:         "64B5F6",
     }
 
     wb = Workbook()
@@ -1660,7 +1747,8 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         c.alignment, c.border = CENTER, BORDER
     rpt.row_dimensions[1].height = 24
 
-    ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740"}
+    LEN_ISSUE = "超過字數上限"
+    ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740", LEN_ISSUE: "64B5F6"}
     rpt_groups: dict[tuple, list] = OrderedDict()
 
     for rd in rows_data:
@@ -1670,6 +1758,27 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         enu_val           = rd.get("enu_val", "")
         key_name          = rd.get("key_name", "")
         key_missing_langs = rd.get("key_missing_langs", [])
+        spec              = rd.get("spec", {})
+
+        # Char-count limit check (spec.json) — independent of the checks below
+        limit = _spec_limit(spec, key_name)
+        if limit is not None:
+            over_labels = []
+            if enu_val and _visual_len(enu_val) > limit:
+                over_labels.append("ENU")
+            for lang in sorted_langs:
+                if lang == "en": continue
+                val = trans.get(lang, "")
+                if val and not is_garbled(val) and _visual_len(val) > limit:
+                    over_labels.append(lang_label.get(lang, lang))
+            if over_labels:
+                len_keys_str = _esc_nl(key_name)
+                len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
+                               else (enu_val, LEN_ISSUE, len_keys_str))
+                bucket = rpt_groups.setdefault(len_grp_key, [])
+                for lbl in over_labels:
+                    if lbl not in bucket:
+                        bucket.append(lbl)
 
         for lang in sorted_langs:
             if lang == "en": continue
@@ -1762,22 +1871,25 @@ def _build_legend_sheet(wb):
         ("  紅色底", "未翻譯、空白、亂碼、或翻譯與英文相同"),
         ("  橘色字", "模糊比對（Excel 數字對應翻譯檔變數，hover 看原始字串）"),
         ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
+        ("  粉紅色粗體字", "翻譯超過字數上限（僅該 key 有 spec.json 設定時顯示，字尾括號為目前字數）"),
         ("", ""),
         ("翻譯問題報告色彩", ""),
         ("  紅底", "未翻譯 / 空白"),
         ("  黃底", "與英文翻譯檔相同（ENU）"),
+        ("  藍底", "超過字數上限（module 內 spec.json 設定的字數限制）"),
         ("", ""), ("語言代碼", "語言名稱"),
     ] + list(LANG_NAMES.items()), 1):
         ca = ls.cell(row=ri, column=1, value=a)
         cb = ls.cell(row=ri, column=2, value=b)
-        bold = ri in (1, 7, 12)
+        bold = ri in (1, 8, 13)
         ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         if ri == 2:  ca.fill = YELLOW
         if ri == 3:  ca.fill = RED
-        if ri == 8:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
-        if ri == 9:  ca.fill = PatternFill("solid", fgColor="FFAB40")
+        if ri == 6:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
+        if ri == 9:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
         if ri == 10: ca.fill = PatternFill("solid", fgColor="FFD740")
+        if ri == 11: ca.fill = PatternFill("solid", fgColor="64B5F6")
     ls.column_dimensions["A"].width = 22
     ls.column_dimensions["B"].width = 55
 
@@ -1856,6 +1968,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                             "key_name":        key,
                             "trans":           kt,
                             "enu_val":         proj_trans.get("en", ""),
+                            "spec":            proj_trans.get("_spec", {}),
                             "is_first":        is_first_row,
                             "fuzzy":           matched_key != en,
                             "fuzzy_key":       matched_key,
@@ -1871,6 +1984,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                         "key_name":        all_keys[0] if all_keys else "",
                         "trans":           {k: v for k, v in proj_trans.items() if not k.startswith("_")},
                         "enu_val":         proj_trans.get("en", ""),
+                        "spec":            proj_trans.get("_spec", {}),
                         "is_first":        proj == first_proj,
                         "fuzzy":           matched_key != en,
                         "fuzzy_key":       matched_key,
@@ -1880,7 +1994,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         else:
             rows_data.append({
                 "page": page, "en": en, "module": "",
-                "key_name": "", "trans": {}, "enu_val": "",
+                "key_name": "", "trans": {}, "enu_val": "", "spec": {},
                 "is_first": True, "fuzzy": False,
                 "fuzzy_key": en, "not_found": True,
             })
@@ -1923,23 +2037,25 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     NF_FILL       = PatternFill("solid", fgColor="FFF3CD")
     NF_FONT       = Font(name="Microsoft JhengHei UI", size=9, color="cc4400", bold=True)
     DIM_FONT      = Font(name="Microsoft JhengHei UI", size=10, color="aaaaaa")
+    LEN_FONT      = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
     GROUP_TOP     = Border(left=thin, right=thin,
                            top=Side(style="medium", color="302B63"),
                            bottom=Side(style="thin", color="DDDDDD"))
     KEY_COL_FILL  = PatternFill("solid", fgColor="F5F3FF")
 
-    _base_hdrs = (["Page", "Module", "EN (Base, from App)", "Key(s)"]
+    _base_hdrs = (["Page", "Module", "EN (Base, from App)", "Key(s)", "字數上限"]
                   if has_module else
-                  ["Page", "EN (Base, from App)", "Key(s)"])
+                  ["Page", "EN (Base, from App)", "Key(s)", "字數上限"])
     for ci, h in enumerate(_base_hdrs + [_hdr(l) for l in sorted_langs], 1):
         c = ws.cell(row=1, column=ci, value=h)
         c.fill, c.font, c.alignment, c.border = HEADER, H_FONT, CENTER, BORDER
     ws.row_dimensions[1].height = 32
     # Column indices for data rows
-    _mod_ci  = 2                          # Module col (only used when has_module)
-    _en_ci   = 3 if has_module else 2     # EN col
-    _key_ci  = 4 if has_module else 3     # Key col
-    _lang_ci = 5 if has_module else 4     # First lang col
+    _mod_ci   = 2                          # Module col (only used when has_module)
+    _en_ci    = 3 if has_module else 2     # EN col
+    _key_ci   = 4 if has_module else 3     # Key col
+    _limit_ci = 5 if has_module else 4     # spec.json char-count limit col
+    _lang_ci  = 6 if has_module else 5     # First lang col
 
     test_rows: list = []   # collects (lang_header, page, module, en, trans, fill_hex) for Test Sheet
 
@@ -1951,6 +2067,9 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         is_first  = rd["is_first"]
         not_found = rd["not_found"]
         border    = GROUP_TOP if is_first else BORDER
+        spec      = rd.get("spec", {})
+        limit     = _spec_limit(spec, key_name)
+        lines_lim = _spec_lines(spec, key_name)
 
         valid    = {l: _visual_len(v) for l, v in trans.items()
                     if l in sorted_langs and v and not is_garbled(v)
@@ -2008,13 +2127,34 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.alignment = LEFT
         c.border = border
 
+        # Char-count / line-count limit col (spec.json), only when this key has one
+        if limit is None:
+            limit_display = None
+        elif lines_lim is not None:
+            limit_display = f"{limit}（{lines_lim}行）"
+        else:
+            limit_display = limit
+        c = ws.cell(row=ri, column=_limit_ci, value=limit_display)
+        c.font = Font(name="Microsoft JhengHei UI", size=10)
+        c.alignment = CENTER
+        c.border = border
+
         # Lang cols
         for ci, lang in enumerate(sorted_langs, _lang_ci):
             val     = trans.get(lang, "")
             is_base = (lang == "en")
             if is_base:
                 val = enu_val
-            c = ws.cell(row=ri, column=ci, value=_xl_safe(_esc_nl(val)) or None)
+
+            # When this key has a spec.json limit, append the current char count
+            over_limit = False
+            cell_text  = _xl_safe(_esc_nl(val)) or None
+            if limit is not None and val and not is_garbled(val):
+                vlen       = _visual_len(val)
+                over_limit = vlen > limit
+                cell_text  = f"{cell_text} ({vlen})"
+
+            c = ws.cell(row=ri, column=ci, value=cell_text)
             c.alignment, c.border = LEFT, border
             if not val or is_garbled(val):
                 c.fill, c.font = RED, D_FONT
@@ -2035,6 +2175,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                 test_rows.append((_ts_lang(lang), rd["page"], rd["module"], en_val, _xl_safe(val), "FFF176"))
             else:
                 c.font = D_FONT
+            if over_limit:
+                c.font = LEN_FONT
 
         # Not-found strings come from the server — expand one row per language
         if rd["not_found"] and rd["is_first"]:
@@ -2050,12 +2192,13 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     else:
         ws.column_dimensions["B"].width = 42   # EN
         ws.column_dimensions["C"].width = 36   # Key
+    ws.column_dimensions[get_column_letter(_limit_ci)].width = 16   # 字數上限
     _freeze = get_column_letter(_lang_ci) + "2"
     for i in range(len(sorted_langs)):
         ws.column_dimensions[get_column_letter(i + _lang_ci)].width = 28
     ws.freeze_panes = _freeze
 
-    main_col_widths = {"A": 16}
+    main_col_widths = {"A": 16, get_column_letter(_limit_ci): 16}
     if has_module:
         main_col_widths.update({"B": 40, "C": 42, "D": 36})
     else:
@@ -3548,6 +3691,8 @@ class App(tk.Tk):
                                          if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
                                         key=lambda kv: _visual_len(kv[1]), reverse=True
                                     )
+                                    all_keys = pt.get("_all_keys", [])
+                                    spec     = pt.get("_spec", {})
                                     for lang, val in rows:
                                         code   = lang_label.get(lang, lang)
                                         if lang == "en":
@@ -3556,7 +3701,8 @@ class App(tk.Tk):
                                             status = "❌"
                                         else:
                                             status = "✅"
-                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)})", "info")
+                                        flag = _len_flag(all_keys, spec, val)
+                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)}){flag}", "info")
                         continue
 
                     # ── Normal / fuzzy lookup ──────────────────────────────
@@ -3581,6 +3727,8 @@ class App(tk.Tk):
                              if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
                             key=lambda kv: _visual_len(kv[1]), reverse=True
                         )
+                        all_keys = pt.get("_all_keys", [])
+                        spec     = pt.get("_spec", {})
                         for lang, val in rows:
                             code   = lang_label.get(lang, lang)
                             if lang == "en":
@@ -3589,7 +3737,8 @@ class App(tk.Tk):
                                 status = "❌"
                             else:
                                 status = "✅"
-                            self._log_ql(f"   {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)})", "info")
+                            flag = _len_flag(all_keys, spec, val)
+                            self._log_ql(f"   {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)}){flag}", "info")
                 self._log_ql("─────────────────────────────────────")
 
             except Exception as ex:
