@@ -25,6 +25,10 @@ v2.6
     → 翻譯對照 sheet 同步支援：Key(s) 欄後新增「字數上限」欄，顯示 count（有 lines 設定時
       一併顯示，如「16（1行）」，僅供參考不納入判斷）；有設定上限的 key，各語言翻譯
       後方加註目前字數，超過上限時該格文字改粉紅色粗體（不影響原本的紅底/黃底判斷）
+  • Excel 查詢 input 支援第 3、4 欄（Max String Length / Max String Line，選填）：
+    有填時會拿翻譯 zip 裡的 spec.json 驗證是否一致，查無 spec.json、spec.json 沒這個 key、
+    或數值跟 Excel 不符時，「字數上限」欄改顯示 ⚠️ 錯誤訊息（紅色粗體字）。沒填這兩欄則
+    完全維持原本行為
 
 Bug 修正
   • 說明頁色彩圖例：「與英文翻譯檔相同」列實際填色跟報告不一致（橘色 vs 報告實際的黃色）→ 修正對齊
@@ -723,6 +727,30 @@ def _len_flag(all_keys: list, spec: dict, val: str) -> str:
         if lim is not None and _visual_len(val) > lim:
             limits.append(lim)
     return f"  ⚠️超過字數上限({min(limits)})" if limits else ""
+
+def _limit_cell(spec: dict, key: str, exp_count, exp_lines):
+    """字數上限 column value for 翻譯對照.
+
+    If the input Excel supplied an expected count/lines (Max String Length /
+    Max String Line columns), validate the zip's spec.json against it and
+    surface a mismatch as a short ⚠️ message. Otherwise just show the zip's
+    own value (or blank), unchanged from before those columns existed.
+    """
+    limit     = _spec_limit(spec, key)
+    lines_lim = _spec_lines(spec, key)
+    if exp_count is None and exp_lines is None:
+        if limit is None:
+            return None
+        return f"{limit}（{lines_lim}行）" if lines_lim is not None else limit
+    if not spec:
+        return "⚠️查無 spec.json"
+    if limit is None:
+        return "⚠️spec.json 查無此 key"
+    if (exp_count is not None and limit != exp_count) or (exp_lines is not None and lines_lim != exp_lines):
+        zip_str = f"{limit}/{lines_lim if lines_lim is not None else '-'}"
+        exp_str = f"{exp_count if exp_count is not None else '-'}/{exp_lines if exp_lines is not None else '-'}"
+        return f"⚠️與 Excel 不符（zip:{zip_str}，Excel:{exp_str}）"
+    return f"{limit}（{lines_lim}行）" if lines_lim is not None else limit
 
 
 _RE_PRINTF   = re.compile(r'%\d+\$[@disfeEgGuoxXld]+')
@@ -1905,6 +1933,16 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     df       = pd_.read_excel(str(input_xlsx), header=0)
     page_col = df.columns[0]
     en_col   = df.columns[1]
+    len_col  = df.columns[2] if len(df.columns) > 2 else None   # Max String Length (optional)
+    line_col = df.columns[3] if len(df.columns) > 3 else None   # Max String Line (optional)
+
+    def _int_or_none(v):
+        if v is None or pd_.isna(v):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
 
     # Pre-expand wildcard rows (* glob) into individual query tuples
     query_rows = []
@@ -1913,20 +1951,22 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         pg     = str(row[page_col]).strip() if pd_.notna(row[page_col]) else ""
         if not en_raw:
             continue    # EN 欄空白的列（只填 Page）不當成查詢
+        exp_count = _int_or_none(row[len_col])  if len_col  is not None else None
+        exp_lines = _int_or_none(row[line_col]) if line_col is not None else None
         if '*' in en_raw:
             hits = sorted(k for k in index if _fnmatch.fnmatch(k.lower(), en_raw.lower()))
             if hits:
-                query_rows.extend((pg, m) for m in hits)
+                query_rows.extend((pg, m, exp_count, exp_lines) for m in hits)
             else:
-                query_rows.append((pg, en_raw))   # keep to show ⚠ not-found
+                query_rows.append((pg, en_raw, exp_count, exp_lines))   # keep to show ⚠ not-found
         else:
-            query_rows.append((pg, en_raw))
+            query_rows.append((pg, en_raw, exp_count, exp_lines))
     total = len(query_rows)
 
     rows_data = []
     seen_langs: set = set()
 
-    for i, (page, en) in enumerate(query_rows):
+    for i, (page, en, exp_count, exp_lines) in enumerate(query_rows):
         if cancel_event and cancel_event.is_set():
             log("⚠️  已取消"); return
 
@@ -1969,6 +2009,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                             "trans":           kt,
                             "enu_val":         proj_trans.get("en", ""),
                             "spec":            proj_trans.get("_spec", {}),
+                            "exp_count":       exp_count,
+                            "exp_lines":       exp_lines,
                             "is_first":        is_first_row,
                             "fuzzy":           matched_key != en,
                             "fuzzy_key":       matched_key,
@@ -1985,6 +2027,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                         "trans":           {k: v for k, v in proj_trans.items() if not k.startswith("_")},
                         "enu_val":         proj_trans.get("en", ""),
                         "spec":            proj_trans.get("_spec", {}),
+                        "exp_count":       exp_count,
+                        "exp_lines":       exp_lines,
                         "is_first":        proj == first_proj,
                         "fuzzy":           matched_key != en,
                         "fuzzy_key":       matched_key,
@@ -2127,15 +2171,14 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         c.alignment = LEFT
         c.border = border
 
-        # Char-count / line-count limit col (spec.json), only when this key has one
-        if limit is None:
-            limit_display = None
-        elif lines_lim is not None:
-            limit_display = f"{limit}（{lines_lim}行）"
-        else:
-            limit_display = limit
+        # Char-count / line-count limit col (spec.json), validated against the
+        # input Excel's Max String Length / Max String Line columns when present
+        limit_display = _limit_cell(spec, key_name, rd.get("exp_count"), rd.get("exp_lines"))
         c = ws.cell(row=ri, column=_limit_ci, value=limit_display)
-        c.font = Font(name="Microsoft JhengHei UI", size=10)
+        if isinstance(limit_display, str) and limit_display.startswith("⚠️"):
+            c.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="C62828")
+        else:
+            c.font = Font(name="Microsoft JhengHei UI", size=10)
         c.alignment = CENTER
         c.border = border
 
@@ -2192,13 +2235,14 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     else:
         ws.column_dimensions["B"].width = 42   # EN
         ws.column_dimensions["C"].width = 36   # Key
-    ws.column_dimensions[get_column_letter(_limit_ci)].width = 16   # 字數上限
+    ws.column_dimensions[get_column_letter(_limit_ci)].width = 26   # 字數上限（含 Excel 不符警告訊息）
     _freeze = get_column_letter(_lang_ci) + "2"
     for i in range(len(sorted_langs)):
         ws.column_dimensions[get_column_letter(i + _lang_ci)].width = 28
     ws.freeze_panes = _freeze
 
-    main_col_widths = {"A": 16, get_column_letter(_limit_ci): 16}
+    _limit_col_letter = get_column_letter(_limit_ci)
+    main_col_widths = {"A": 16, _limit_col_letter: 26}
     if has_module:
         main_col_widths.update({"B": 40, "C": 42, "D": 36})
     else:
@@ -2209,7 +2253,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         main_col_widths[col] = 28
         lang_cols.add(col)
     _en_col_letter = get_column_letter(_en_ci)
-    _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {_en_col_letter})
+    _auto_row_height(ws, main_col_widths, content_cols=lang_cols | {_en_col_letter, _limit_col_letter})
 
     # ── Sheet 2: Test Sheet ───────────────────────────────────────────────────
     seen_test: set = set()
