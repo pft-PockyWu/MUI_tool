@@ -745,7 +745,7 @@ def _limit_cell(spec: dict, key: str, exp_count, exp_lines):
     if not spec:
         return "⚠️查無 spec.json"
     if limit is None:
-        return "⚠️spec.json 查無此 key"
+        return "⚠️spec.json 裡無定義此 key 字數"
     if (exp_count is not None and limit != exp_count) or (exp_lines is not None and lines_lim != exp_lines):
         zip_str = f"{limit}/{lines_lim if lines_lim is not None else '-'}"
         exp_str = f"{exp_count if exp_count is not None else '-'}/{exp_lines if exp_lines is not None else '-'}"
