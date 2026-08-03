@@ -30,6 +30,10 @@ v2.6
     或數值跟 Excel 不符時，「字數上限」欄改顯示 ⚠️ 錯誤訊息（紅色粗體字）。沒填這兩欄則
     完全維持原本行為
 
+語言調整
+  • 馬來語代碼 MSL 改為 MSA（所有 App 皆同步調整）；舊版 Ignore 表若仍寫 MSL 需一併改成 MSA，
+    否則會被視為未知語言代碼而忽略
+
 Bug 修正
   • 說明頁色彩圖例：「與英文翻譯檔相同」列實際填色跟報告不一致（橘色 vs 報告實際的黃色）→ 修正對齊
 
@@ -324,7 +328,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "IND": "id",
         "THA": "th",
         "TRK": "tr",
-        "MSL": "ms",
+        "MSA": "ms",
         "ITA": "it",
         "NLD": "nl",
         "HEB": "he",
@@ -351,7 +355,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "PTB": "pt",
         "IND": "id",
         "TRK": "tr",
-        "MSL": "ms",
+        "MSA": "ms",
         "NLD": "nl",
         "ITA": "it",
         "HUN": "hu",
@@ -379,7 +383,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "IND": "id",
         "THA": "th",
         "TRK": "tr",
-        "MSL": "ms",
+        "MSA": "ms",
         "NLD": "nl",
         "ELL": "el",
         "POL": "pl",
@@ -409,7 +413,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "IND": "id",
         "THA": "th",
         "TRK": "tr",
-        "MSL": "ms",
+        "MSA": "ms",
         "NLD": "nl",
         "HEB": "he",
         "ARA": "ar",
@@ -438,7 +442,7 @@ APP_CONFIGS: dict[str, dict | None] = {
         "IND": "id",
         "THA": "th",
         "TRK": "tr",
-        "MSL": "ms",
+        "MSA": "ms",
         "NLD": "nl",
     },
 
@@ -455,7 +459,7 @@ _WEB_LOCALE_TO_CODE: dict[str, str] = {
     "en_US": "ENU",  "zh_TW": "CHT",  "zh_CN": "CHS",  "ja_JP": "JPN",
     "ko_KR": "KOR",  "ar_AE": "ARA",  "fr_FR": "FRA",  "de_DE": "DEU",
     "ru_RU": "RUS",  "pt_BR": "PTB",  "id_ID": "IND",  "th_TH": "THA",
-    "tr_TR": "TRK",  "ms_MY": "MSL",  "it_IT": "ITA",  "nl_NL": "NLD",
+    "tr_TR": "TRK",  "ms_MY": "MSA",  "it_IT": "ITA",  "nl_NL": "NLD",
     "he_IL": "HEB",  "pl_PL": "POL",  "fil_PH": "FIL", "hu_HU": "HUN",
     "sv_SE": "SWE",  "el_GR": "ELL",  "ro_RO": "RON",  "uk_UA": "UKR",
     "bg_BG": "BUL",  "hr_HR": "HRV",  "da_DK": "DAN",  "gn_PY": "GRN",
