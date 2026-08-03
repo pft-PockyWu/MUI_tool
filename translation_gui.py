@@ -36,6 +36,9 @@ v2.6
 
 Bug 修正
   • 說明頁色彩圖例：「與英文翻譯檔相同」列實際填色跟報告不一致（橘色 vs 報告實際的黃色）→ 修正對齊
+  • Android strings.xml 的 module 判斷只認「module/src/main/res/...」深度，module/res/...（無
+    src/main，如 lib-widget-doc）這種較淺路徑的模組會被誤判成 zip 根資料夾名稱 → 改用
+    res/src 是否緊接在第二層來判斷有無包一層外層資料夾，兩種深度皆正確辨識
 
 ────────────────────────────────────────
 v2.5
@@ -827,7 +830,10 @@ def build_index(source: Path, base_lang: str, log) -> tuple:
                 fname, folder = parts[-1], parts[-2]
                 raw = _decode_bytes(zf.read(info))
                 if fname == "strings.xml":
-                    proj = parts[1] if len(parts) >= 7 else parts[0]
+                    # module/res/values.../strings.xml vs module/src/main/res/values.../strings.xml —
+                    # depth varies, but parts[1] is "res"/"src" only when parts[0] IS the module
+                    # (no wrapper folder); otherwise parts[1] is the module itself.
+                    proj = parts[0] if parts[1] in ("res", "src") else parts[1]
                     process_file(proj, fname, raw, folder)
                 else:
                     proj = parts[1] if parts[0] == "packages" and len(parts) >= 4 else parts[-2]
