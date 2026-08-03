@@ -29,6 +29,8 @@ v2.6
     有填時會拿翻譯 zip 裡的 spec.json 驗證是否一致，查無 spec.json、spec.json 沒這個 key、
     或數值跟 Excel 不符時，「字數上限」欄改顯示 ⚠️ 錯誤訊息（紅色粗體字）。沒填這兩欄則
     完全維持原本行為
+  • Header 新增「🗑️ 清除快取」按鈕：一鍵刪除暫存資料夾裡所有翻譯來源的快取索引，
+    確保下次執行時重新掃描 Zip，不會拿到舊快取資料
 
 語言調整
   • 馬來語代碼 MSL 改為 MSA（所有 App 皆同步調整）；舊版 Ignore 表若仍寫 MSL 需一併改成 MSA，
@@ -39,6 +41,8 @@ Bug 修正
   • Android strings.xml 的 module 判斷只認「module/src/main/res/...」深度，module/res/...（無
     src/main，如 lib-widget-doc）這種較淺路徑的模組會被誤判成 zip 根資料夾名稱 → 改用
     res/src 是否緊接在第二層來判斷有無包一層外層資料夾，兩種深度皆正確辨識
+  • 「spec.json 查無此 key」文字易誤會成看似 key 本身不存在 → 改為「spec.json 裡無定義此
+    key 字數」
 
 ────────────────────────────────────────
 v2.5
@@ -2465,6 +2469,11 @@ class App(tk.Tk):
                   activeforeground="#cdd6f4", activebackground="#11111b",
                   relief="flat", cursor="hand2", bd=0,
                   command=self._show_changelog).pack(side="left", padx=(12, 0))
+        tk.Button(sub_f, text="🗑️ 清除快取",
+                  font=("Microsoft JhengHei UI", 9), fg="#f38ba8", bg="#11111b",
+                  activeforeground="#cdd6f4", activebackground="#11111b",
+                  relief="flat", cursor="hand2", bd=0,
+                  command=self._clear_cache).pack(side="left", padx=(12, 0))
 
         # ── Two-column body ───────────────────────────────────────────────────
         body = tk.Frame(self._inner, bg=BG)
@@ -3150,6 +3159,28 @@ class App(tk.Tk):
         if app in self._cfg:
             self._cfg[app].pop("ignore", None)
         self._save_app_paths()
+
+    def _clear_cache(self):
+        import tempfile
+        cache_dir = Path(tempfile.gettempdir()) / "TranslationTool"
+        files = list(cache_dir.glob("lookup_*.json")) if cache_dir.exists() else []
+        if not files:
+            messagebox.showinfo("清除快取", "目前沒有快取索引檔案。")
+            return
+        if not messagebox.askyesno(
+            "清除快取",
+            f"確定要清除 {len(files)} 個快取索引檔嗎？\n"
+            "下次選取翻譯 Zip 時會重新掃描建立索引，避免拿到舊資料。"
+        ):
+            return
+        deleted = 0
+        for f in files:
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
+        messagebox.showinfo("清除快取", f"已清除 {deleted} 個快取索引檔案。")
 
     # ── Index loader (shared by _run, _run_scan, _quick_lookup) ──────────────
 
