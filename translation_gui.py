@@ -43,6 +43,8 @@ Bug 修正
     res/src 是否緊接在第二層來判斷有無包一層外層資料夾，兩種深度皆正確辨識
   • 「spec.json 查無此 key」文字易誤會成看似 key 本身不存在 → 改為「spec.json 裡無定義此
     key 字數」
+  • 「清除快取」按鈕沒有跟其他動作一樣檢查 self._busy → 任務執行中點擊會跟背景執行緒的
+    快取讀寫互相搶跑，改為執行中直接擋下並提示
 
 ────────────────────────────────────────
 v2.5
@@ -3161,6 +3163,8 @@ class App(tk.Tk):
         self._save_app_paths()
 
     def _clear_cache(self):
+        if self._busy:
+            messagebox.showwarning("提示", "有任務執行中，請稍候再清除快取"); return
         import tempfile
         cache_dir = Path(tempfile.gettempdir()) / "TranslationTool"
         files = list(cache_dir.glob("lookup_*.json")) if cache_dir.exists() else []
