@@ -45,6 +45,11 @@ Bug 修正
     key 字數」
   • 「清除快取」按鈕沒有跟其他動作一樣檢查 self._busy → 任務執行中點擊會跟背景執行緒的
     快取讀寫互相搶跑，改為執行中直接擋下並提示
+  • Ignore 表比對 Module 名稱區分大小寫 → zip 資料夾與 Ignore 表大小寫不一致時整個 module
+    的 Ignore 設定完全失效（如 YouCamEnhance-doc vs youcamenhance-doc）→ 改為不分大小寫比對
+  • 語言掃描報告：多個 key 共用同一 EN 字串時，只要有一個 key 未被 Ignore 表涵蓋，整組所有
+    key 都會被列為「與英文翻譯檔相同」→ 改為只列出「未被 Ignore 涵蓋」的 key，已涵蓋的 key
+    不再出現在該行
 
 ────────────────────────────────────────
 v2.5
@@ -1013,7 +1018,7 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> 
     ignore: set = set()
     unknown_codes: set = set()
     for _, row in df.iterrows():
-        module    = str(row.iloc[0]).strip() if pd_.notna(row.iloc[0]) else ""
+        module    = str(row.iloc[0]).strip().lower() if pd_.notna(row.iloc[0]) else ""
         key_name  = _unesc_nl(str(row.iloc[2]).strip()) if pd_.notna(row.iloc[2]) else ""
         langs_str = str(row.iloc[3]).strip() if pd_.notna(row.iloc[3]) else ""
 
@@ -1037,7 +1042,11 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> 
 
 
 def _in_ignore(ignore_set: set, module: str, key: str, lang: str) -> bool:
-    """Check ignore_set with wildcard support for ALL_LANGUAGES entries."""
+    """Check ignore_set with wildcard support for ALL_LANGUAGES entries.
+    Module comparison is case-insensitive (zip folder casing and ignore-table
+    casing for the same module can differ, e.g. "YouCamEnhance-doc" vs
+    "youcamenhance-doc")."""
+    module = module.strip().lower() if module else ""
     return (module, key, lang) in ignore_set or (module, key, "*") in ignore_set
 
 
@@ -1238,13 +1247,15 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                 issue    = "未翻譯 / 空白"
                 keys_str = "\n".join(_esc_nl(k) for k in all_keys)
             elif enu_val and val.strip() == enu_val.strip():
-                # Check ignore: pass if ALL keys for this string are in ignore_set
-                if ignore_set and all(
-                    _in_ignore(ignore_set, module, k, lang) for k in (all_keys or [""])
-                ):
-                    continue
+                # Only report keys NOT covered by ignore_set; skip entirely if none remain
+                report_keys = all_keys or [""]
+                if ignore_set:
+                    report_keys = [k for k in report_keys
+                                   if not _in_ignore(ignore_set, module, k, lang)]
+                    if not report_keys:
+                        continue
                 issue    = "與英文翻譯檔相同"
-                keys_str = "\n".join(_esc_nl(k) for k in all_keys)
+                keys_str = "\n".join(_esc_nl(k) for k in report_keys)
             elif missing_keys:
                 issue    = "未翻譯 / 空白"
                 keys_str = "\n".join(_esc_nl(k) for k in missing_keys)
