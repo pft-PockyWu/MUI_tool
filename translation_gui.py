@@ -36,6 +36,7 @@ v2.6
   • 馬來語代碼 MSL 改為 MSA（所有 App 皆同步調整）；舊版 Ignore 表若仍寫 MSL 需一併改成 MSA，
     否則會被視為未知語言代碼而忽略
   • YCE 新增 GRN 瓜拉尼語、HRV 克羅埃西亞語（共 26 語言）
+  • YMK 新增 HRV 克羅埃西亞語、SWE 瑞典語（共 27 語言）
 
 Bug 修正
   • 說明頁色彩圖例：「與英文翻譯檔相同」列實際填色跟報告不一致（橘色 vs 報告實際的黃色）→ 修正對齊
@@ -354,6 +355,8 @@ APP_CONFIGS: dict[str, dict | None] = {
         "HUN": "hu",
         "UKR": "uk",
         "BUL": "bg",
+        "HRV": "hr",
+        "SWE": "sv",
     },
 
     "YCE": {
