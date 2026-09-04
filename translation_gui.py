@@ -18,7 +18,7 @@ CHANGELOG = """\
 v2.8
 ────────────────────────────────────────
 新功能
-  • 新增「YCM」App（YouCam Muse，33 語言）
+  • 新增「YCM」App（YouCam Muse，10 語言：ENU/JPN/ESP/KOR/PTB/HIN/IND/CHT/DEU/FRA）
 
 ────────────────────────────────────────
 v2.7
@@ -479,38 +479,15 @@ APP_CONFIGS: dict[str, dict | None] = {
 
     "YCM": {
         "ENU": "en",
-        "CHT": "zh-Hant",
-        "CHS": "zh-Hans",
         "JPN": "ja",
-        "KOR": "ko",
-        "DEU": "de",
         "ESP": "es",
-        "FRA": "fr",
-        "ITA": "it",
-        "RUS": "ru",
+        "KOR": "ko",
         "PTB": "pt",
-        "IND": "id",
-        "THA": "th",
-        "TRK": "tr",
-        "MSA": "ms",
-        "NLD": "nl",
-        "ELL": "el",
-        "POL": "pl",
-        "RON": "ro",
-        "ARA": "ar",
-        "UKR": "uk",
-        "BUL": "bg",
-        "GRN": "gn",
-        "SWE": "sv",
-        "HRV": "hr",
-        "HUN": "hu",
-        "DAN": "da",
-        "HEB": "he",
-        "AFR": "af",
-        "FIL": "fil",
         "HIN": "hi",
-        "TAM": "ta",
-        "VIE": "vi",
+        "IND": "id",
+        "CHT": "zh-Hant",
+        "DEU": "de",
+        "FRA": "fr",
     },
 
     # Web: dynamic — languages detected from zip at runtime
