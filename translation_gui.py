@@ -10,11 +10,17 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.7.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.8.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.8
+────────────────────────────────────────
+新功能
+  • 新增「YCM」App（YouCam Muse，33 語言）
+
+────────────────────────────────────────
 v2.7
 ────────────────────────────────────────
 語言調整
@@ -469,6 +475,42 @@ APP_CONFIGS: dict[str, dict | None] = {
         "TRK": "tr",
         "MSA": "ms",
         "NLD": "nl",
+    },
+
+    "YCM": {
+        "ENU": "en",
+        "CHT": "zh-Hant",
+        "CHS": "zh-Hans",
+        "JPN": "ja",
+        "KOR": "ko",
+        "DEU": "de",
+        "ESP": "es",
+        "FRA": "fr",
+        "ITA": "it",
+        "RUS": "ru",
+        "PTB": "pt",
+        "IND": "id",
+        "THA": "th",
+        "TRK": "tr",
+        "MSA": "ms",
+        "NLD": "nl",
+        "ELL": "el",
+        "POL": "pl",
+        "RON": "ro",
+        "ARA": "ar",
+        "UKR": "uk",
+        "BUL": "bg",
+        "GRN": "gn",
+        "SWE": "sv",
+        "HRV": "hr",
+        "HUN": "hu",
+        "DAN": "da",
+        "HEB": "he",
+        "AFR": "af",
+        "FIL": "fil",
+        "HIN": "hi",
+        "TAM": "ta",
+        "VIE": "vi",
     },
 
     # Web: dynamic — languages detected from zip at runtime
