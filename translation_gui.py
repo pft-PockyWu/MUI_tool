@@ -19,6 +19,9 @@ v2.8
 ────────────────────────────────────────
 新功能
   • 新增「YCM」App（YouCam Muse，10 語言：ENU/JPN/ESP/KOR/PTB/HIN/IND/CHT/DEU/FRA）
+  • 快速查詢新增語言篩選：查詢文字框上方新增語言 checkbox（比照語言全掃描），可搭配
+    全選/全不選按鈕勾選要查詢的語言，切換 App 時自動重建、預設全選；一般查詢與萬用字元
+    查詢共用同一套篩選
 
 Bug 修正
   • 快速查詢：翻譯字串只顯示前 60 字元就被截斷，長字串看不到完整內容 → 改為完整顯示
@@ -2458,6 +2461,7 @@ class App(tk.Tk):
 
         # Rebuild scan checkboxes (also restores saved lang selections)
         self._rebuild_scan_checkboxes()
+        self._rebuild_ql_checkboxes()
 
     def _save_app_paths(self):
         """Save current app's paths to config."""
@@ -2746,6 +2750,28 @@ class App(tk.Tk):
                  font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
         tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行　｜　支援 * 萬用字元",
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(0, 4))
+
+        tk.Label(self._excel_panel, text="篩選語言（預設全選）：",
+                 font=("Microsoft JhengHei UI", 10, "bold"), fg="#a6adc8", bg="#27273a"
+                 ).pack(anchor="w", pady=(0, 4))
+        self._ql_lang_vars: dict[str, tk.BooleanVar] = {}
+        self._ql_cb_frame = tk.Frame(self._excel_panel, bg="#27273a")
+        self._ql_cb_frame.pack(fill="x", pady=(0, 4))
+        self._rebuild_ql_checkboxes()
+
+        ql_sel_row = tk.Frame(self._excel_panel, bg="#27273a")
+        ql_sel_row.pack(anchor="w", pady=(0, 8))
+        tk.Button(ql_sel_row, text="全選", font=("Microsoft JhengHei UI", 10),
+                  bg="#45475a", fg="white", relief="flat", padx=8, pady=2,
+                  cursor="hand2",
+                  command=lambda: [v.set(True) for v in self._ql_lang_vars.values()]
+                  ).pack(side="left", padx=(0, 6))
+        tk.Button(ql_sel_row, text="全不選", font=("Microsoft JhengHei UI", 10),
+                  bg="#45475a", fg="white", relief="flat", padx=8, pady=2,
+                  cursor="hand2",
+                  command=lambda: [v.set(False) for v in self._ql_lang_vars.values()]
+                  ).pack(side="left")
+
         self._ql_text = tk.Text(self._excel_panel, height=5, bg="#313244", fg="#ffffff",
                                 font=("Microsoft JhengHei UI", 12), relief="flat",
                                 insertbackground="white", padx=8, pady=6)
@@ -3079,6 +3105,7 @@ class App(tk.Tk):
             self._cfg["last_app"] = app_name
             save_config(self._cfg)
             self._rebuild_scan_checkboxes()
+            self._rebuild_ql_checkboxes()
 
     def _update_web_lang_preview(self):
         """Update lang preview label for Web app after zip is loaded."""
@@ -3113,6 +3140,30 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=lang in saved_langs)
             self._scan_lang_vars[lang] = var
             tk.Checkbutton(cb_frame, text=code, variable=var,
+                           font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
+                           activebackground="#27273a", activeforeground="#cba6f7",
+                           selectcolor="#45475a", relief="flat", cursor="hand2"
+                           ).grid(row=idx // cols, column=idx % cols,
+                                  padx=6, pady=2, sticky="w")
+
+    def _rebuild_ql_checkboxes(self):
+        """Rebuild quick-lookup language checkboxes when App selection changes. Always defaults to all-selected."""
+        if not hasattr(self, '_ql_cb_frame'): return
+        for child in self._ql_cb_frame.winfo_children():
+            child.destroy()
+        self._ql_lang_vars.clear()
+        app = self._app_var.get()
+        if app == "Web":
+            cfg   = self._web_target_langs or {}
+            langs = [(code, lang) for code, lang in cfg.items()]
+        else:
+            cfg   = APP_CONFIGS.get(app, {}) or {}
+            langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
+        cols = 4
+        for idx, (code, lang) in enumerate(langs):
+            var = tk.BooleanVar(value=True)
+            self._ql_lang_vars[lang] = var
+            tk.Checkbutton(self._ql_cb_frame, text=code, variable=var,
                            font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
                            activebackground="#27273a", activeforeground="#cba6f7",
                            selectcolor="#45475a", relief="flat", cursor="hand2"
@@ -3248,6 +3299,7 @@ class App(tk.Tk):
             detected = _detect_web_langs_from_zip(zip_path)
             self._web_target_langs = detected
             self.after(0, self._rebuild_scan_checkboxes)
+            self.after(0, self._rebuild_ql_checkboxes)
             self.after(0, self._update_web_lang_preview)
 
         if index_path.exists():
@@ -3515,6 +3567,7 @@ class App(tk.Tk):
             if self._app_var.get() == "Web":
                 self._web_target_langs = _detect_web_langs_from_zip(self._zip_path)
                 self._rebuild_scan_checkboxes()
+                self._rebuild_ql_checkboxes()
                 self._update_web_lang_preview()
             self._save_app_paths()
 
@@ -3791,6 +3844,9 @@ class App(tk.Tk):
             messagebox.showwarning("提示", "請先選取翻譯 Zip 檔"); return
         if self._busy:
             self._log_ql("⚠️  有任務執行中，請稍候再查詢", "err"); return
+        ql_allowed = {lang for lang, var in self._ql_lang_vars.items() if var.get()}
+        if not ql_allowed:
+            messagebox.showwarning("提示", "請至少選擇一個語言"); return
 
         self._set_busy(True)
         self._ql_btn.configure(state="disabled")
@@ -3803,7 +3859,7 @@ class App(tk.Tk):
                                 if _ql_app == "Web"
                                 else APP_CONFIGS.get(_ql_app))
                 lang_label   = {v: k for k, v in target_langs.items()} if target_langs else {}
-                allowed      = set(target_langs.values()) if target_langs else None
+                allowed      = ql_allowed
 
                 self._log_ql("─────────────────────────────────────")
                 for q in queries:
