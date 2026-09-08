@@ -20,6 +20,9 @@ v2.8
 新功能
   • 新增「YCM」App（YouCam Muse，10 語言：ENU/JPN/ESP/KOR/PTB/HIN/IND/CHT/DEU/FRA）
 
+Bug 修正
+  • 快速查詢：翻譯字串只顯示前 60 字元就被截斷，長字串看不到完整內容 → 改為完整顯示
+
 ────────────────────────────────────────
 v2.7
 ────────────────────────────────────────
@@ -3832,7 +3835,7 @@ class App(tk.Tk):
                                         else:
                                             status = "✅"
                                         flag = _len_flag(all_keys, spec, val)
-                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)}){flag}", "info")
+                                        self._log_ql(f"      {proj}  [{code}]  {status}  {val}  ({_visual_len(val)}){flag}", "info")
                         continue
 
                     # ── Normal / fuzzy lookup ──────────────────────────────
@@ -3868,7 +3871,7 @@ class App(tk.Tk):
                             else:
                                 status = "✅"
                             flag = _len_flag(all_keys, spec, val)
-                            self._log_ql(f"   {proj}  [{code}]  {status}  {val[:60]}  ({_visual_len(val)}){flag}", "info")
+                            self._log_ql(f"   {proj}  [{code}]  {status}  {val}  ({_visual_len(val)}){flag}", "info")
                 self._log_ql("─────────────────────────────────────")
 
             except Exception as ex:
