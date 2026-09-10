@@ -22,6 +22,8 @@ v2.8
   • 快速查詢新增語言篩選：查詢文字框上方新增語言 checkbox（比照語言全掃描），可搭配
     全選/全不選按鈕勾選要查詢的語言，切換 App 時自動重建、預設全選；一般查詢與萬用字元
     查詢共用同一套篩選
+  • 快速查詢同步讀取 Ignore Excel（與 Excel 查詢/語言全掃描共用同一設定）：翻譯與英文
+    相同、且該 key 已被 Ignore 表涵蓋時，狀態改顯示 ✅(Ignore)，跟真正未翻譯的 ❌ 區分開來
 
 Bug 修正
   • 快速查詢：翻譯字串只顯示前 60 字元就被截斷，長字串看不到完整內容 → 改為完整顯示
@@ -3861,6 +3863,10 @@ class App(tk.Tk):
                 lang_label   = {v: k for k, v in target_langs.items()} if target_langs else {}
                 allowed      = ql_allowed
 
+                ignore_set = set()
+                if self._ignore_path and Path(self._ignore_path).exists():
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
+
                 self._log_ql("─────────────────────────────────────")
                 for q in queries:
                     # ── Wildcard search (* glob) ───────────────────────────
@@ -3886,8 +3892,15 @@ class App(tk.Tk):
                                         code   = lang_label.get(lang, lang)
                                         if lang == "en":
                                             status = "✅"
-                                        elif not val or val.strip() == en_val.strip():
+                                        elif not val:
                                             status = "❌"
+                                        elif val.strip() == en_val.strip():
+                                            if ignore_set and all_keys and all(
+                                                _in_ignore(ignore_set, proj, k, lang) for k in all_keys
+                                            ):
+                                                status = "✅(Ignore)"
+                                            else:
+                                                status = "❌"
                                         else:
                                             status = "✅"
                                         flag = _len_flag(all_keys, spec, val)
@@ -3922,8 +3935,15 @@ class App(tk.Tk):
                             code   = lang_label.get(lang, lang)
                             if lang == "en":
                                 status = "✅"
-                            elif not val or val.strip() == matched.strip():
+                            elif not val:
                                 status = "❌"
+                            elif val.strip() == matched.strip():
+                                if ignore_set and all_keys and all(
+                                    _in_ignore(ignore_set, proj, k, lang) for k in all_keys
+                                ):
+                                    status = "✅(Ignore)"
+                                else:
+                                    status = "❌"
                             else:
                                 status = "✅"
                             flag = _len_flag(all_keys, spec, val)
