@@ -10,11 +10,17 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.8.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.9.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.9
+────────────────────────────────────────
+語言調整
+  • YCA 新增 DAN 丹麥語、SWE 瑞典語、UKR 烏克蘭語、BUL 保加利亞語、RON 羅馬尼亞語（共 21 語言）
+
+────────────────────────────────────────
 v2.8
 ────────────────────────────────────────
 新功能
@@ -483,6 +489,11 @@ APP_CONFIGS: dict[str, dict | None] = {
         "TRK": "tr",
         "MSA": "ms",
         "NLD": "nl",
+        "DAN": "da",
+        "SWE": "sv",
+        "UKR": "uk",
+        "BUL": "bg",
+        "RON": "ro",
     },
 
     "YCM": {
