@@ -10,11 +10,18 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.9.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.10.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.10
+────────────────────────────────────────
+功能調整
+  • 移除「轉換 Ignore」模式（含按鈕、檔案選取、說明面板），模式按鈕改為 2×2 排版：
+    Excel 查詢／語言全掃描／比對新字串／跨平台比對
+
+────────────────────────────────────────
 v2.9
 ────────────────────────────────────────
 語言調整
@@ -1097,124 +1104,6 @@ def _in_ignore(ignore_set: set, module: str, key: str, lang: str) -> bool:
     "youcamenhance-doc")."""
     module = module.strip().lower() if module else ""
     return (module, key, lang) in ignore_set or (module, key, "*") in ignore_set
-
-
-# ── Scan-report → Ignore-table converter ─────────────────────────────────────
-
-def _detect_lang_sheets(xl: "pd.ExcelFile") -> dict:
-    """
-    Return {sheet_name: LANG_CODE} for every language-analysis sheet.
-    Detects by finding the first 2–5 consecutive uppercase letters in the
-    sheet name (e.g. "FIL Extracted", "FIL_Extraction", "HEB_Extraction").
-    Sheet must also contain a Comment column to avoid false positives.
-    """
-    result = {}
-    for name in xl.sheet_names:
-        m = re.search(r'[A-Z]{2,5}', name)
-        if not m:
-            continue
-        try:
-            header = pd.read_excel(xl, sheet_name=name, nrows=0)
-        except Exception:
-            continue
-        cols = [str(c).strip() for c in header.columns]
-        if len(cols) >= 6 and "Comment" in cols:
-            result[name] = m.group(0)
-    return result
-
-
-def convert_scan_to_ignore(input_xlsx: Path, output_xlsx: Path, log) -> int:
-    """
-    Convert a language scan report to an ignore table Excel.
-    Auto-detects language sheets via column names or sheet name pattern;
-    for each Pass row assigns only that sheet's own language.
-    Returns number of rows written.
-    """
-    xl = pd.ExcelFile(str(input_xlsx))
-
-    lang_sheets = _detect_lang_sheets(xl)
-
-    if not lang_sheets:
-        raise ValueError(
-            "找不到語言分析 Sheet。\n"
-            "支援的格式（擇一即可）：\n"
-            "  • 欄位名稱含「<語言> Translation」，例如：FIL Translation\n"
-            "  • Sheet 名稱以語言代碼開頭，例如：FIL Extracted、FIL_Extraction"
-        )
-
-    log(f"🔍 偵測到語言 Sheet: {list(lang_sheets.values())}")
-
-    records: dict[tuple, set] = {}
-    for sheet, lang in lang_sheets.items():
-        df = pd.read_excel(xl, sheet_name=sheet)
-        if df.shape[1] < 6:
-            log(f"⚠️  '{sheet}' 欄位不足，跳過")
-            continue
-        n_pass = n_all = 0
-        for _, row in df.iterrows():
-            comment = str(row.iloc[5]).strip().lower() if pd.notna(row.iloc[5]) else ""
-            if comment not in ("pass", "all_pass"):
-                continue
-            module   = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-            enu      = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-            keys_raw = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-            for key in keys_raw.split("\n"):
-                key = key.strip()
-                if not key:
-                    continue
-                k = (module, enu, key)
-                if comment == "all_pass":
-                    records[k] = {"ALL_LANGUAGES"}
-                    n_all += 1
-                elif "ALL_LANGUAGES" not in records.get(k, set()):
-                    records.setdefault(k, set()).add(lang)
-                    n_pass += 1
-        log(f"  {lang}: {n_pass} 個 Key Pass，{n_all} 個 Key ALL_LANGUAGES")
-
-    rows = []
-    for (module, enu, key), langs in sorted(records.items()):
-        lang_str = "ALL_LANGUAGES" if "ALL_LANGUAGES" in langs else ", ".join(sorted(langs))
-        rows.append([module, enu, key, lang_str])
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Ignore Table"
-
-    hdr_fill  = PatternFill("solid", fgColor="4472C4")
-    hdr_font  = Font(name="Microsoft JhengHei UI", bold=True, color="FFFFFF", size=11)
-    thin_s    = Side(style="thin", color="BFBFBF")
-    cell_bdr  = Border(left=thin_s, right=thin_s, top=thin_s, bottom=thin_s)
-    alt_fill  = PatternFill("solid", fgColor="EEF2FA")
-    data_font = Font(name="Microsoft JhengHei UI", size=10)
-
-    for c, h in enumerate(["Module", "ENU翻譯檔字串", "問題Key", "語言"], 1):
-        cell = ws.cell(row=1, column=c, value=h)
-        cell.font      = hdr_font
-        cell.fill      = hdr_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border    = cell_bdr
-
-    for r, row_data in enumerate(rows, 2):
-        fill = alt_fill if r % 2 == 0 else None
-        for c, val in enumerate(row_data, 1):
-            cell = ws.cell(row=r, column=c, value=val)
-            cell.font      = data_font
-            cell.alignment = Alignment(vertical="center")
-            cell.border    = cell_bdr
-            if fill:
-                cell.fill = fill
-
-    ws.row_dimensions[1].height = 20
-    ws.column_dimensions["A"].width = 36
-    ws.column_dimensions["B"].width = 22
-    ws.column_dimensions["C"].width = 48
-    ws.column_dimensions["D"].width = 18
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:D{len(rows) + 1}"
-
-    wb.save(str(output_xlsx))
-    log(f"✅ 輸出完成: {output_xlsx.name}（共 {len(rows)} 筆）")
-    return len(rows)
 
 
 # ── Language scan report (scan mode) ─────────────────────────────────────────
@@ -2371,7 +2260,6 @@ class App(tk.Tk):
         self._xplat_ios_path = None        # xplat mode: ios zip
         self._xplat_out_path = None        # xplat mode: output xlsx
         self._scan_out_path = None
-        self._convert_in_path = self._convert_out_path = None
         self._cancel_event = threading.Event()
         self._busy = False   # 有 worker 執行中 — 鎖模式/App 切換與其他 Run
         self._ignore_var = tk.StringVar(value="未設定（可選）")
@@ -2456,8 +2344,6 @@ class App(tk.Tk):
             self._scan_out_path = Path(scan_out)
             self._scan_out_var.set(self._fmt_name(Path(scan_out).name))
 
-        _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
-        _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
         _try_set(app_cfg.get("zip_old"),      self._zip_old_var,      "_zip_old_path")
         _try_set(app_cfg.get("diff_out"),     self._diff_out_var,     "_diff_out_path")
         _try_set(app_cfg.get("xplat_android"), self._xplat_android_var, "_xplat_android_path")
@@ -2491,10 +2377,6 @@ class App(tk.Tk):
             self._cfg[app]["ignore"] = str(self._ignore_path)
         if self._scan_out_path:
             self._cfg[app]["scan_out"] = str(self._scan_out_path)
-        if self._convert_in_path:
-            self._cfg[app]["convert_in"]  = str(self._convert_in_path)
-        if self._convert_out_path:
-            self._cfg[app]["convert_out"] = str(self._convert_out_path)
         if self._zip_old_path:
             self._cfg[app]["zip_old"]  = str(self._zip_old_path)
         if self._diff_out_path:
@@ -2596,9 +2478,9 @@ class App(tk.Tk):
         mode_btns.columnconfigure(0, weight=1, uniform="mc")
         mode_btns.columnconfigure(1, weight=1, uniform="mc")
         _mode_grid = {"excel": (0, 0), "scan": (0, 1),
-                      "convert": (1, 0), "diff": (1, 1)}
+                      "diff": (1, 0), "xplat": (1, 1)}
         for val, label in [("excel", "Excel 查詢"), ("scan", "語言全掃描"),
-                            ("convert", "轉換 Ignore"), ("diff", "比對新字串")]:
+                            ("diff", "比對新字串"), ("xplat", "跨平台比對")]:
             r, c = _mode_grid[val]
             btn = tk.Button(mode_btns, text=label,
                             font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
@@ -2608,17 +2490,11 @@ class App(tk.Tk):
                      padx=(0, 3) if c == 0 else 0,
                      pady=(0, 3) if r == 0 else 0)
             self._mode_buttons[val] = btn
-        _xplat_btn = tk.Button(mode_btns, text="跨平台比對",
-                               font=("Microsoft JhengHei UI", 11, "bold"), relief="flat",
-                               cursor="hand2", padx=14, pady=5, bd=0,
-                               command=lambda: self._set_mode("xplat"))
-        _xplat_btn.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
-        self._mode_buttons["xplat"] = _xplat_btn
         self._set_mode("excel", init=True)
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(0, 8))
 
-        # File pickers container — swapped between standard and convert mode
+        # File pickers container — swapped between standard, diff, and xplat mode
         fp_container = tk.Frame(left, bg=BG)
         fp_container.pack(fill="x")
 
@@ -2658,18 +2534,6 @@ class App(tk.Tk):
         self._bind_row_tooltip(self._out_row,   lambda: str(self._out_path)    if self._out_path    else None)
         for w in (self._ignore_lbl, self._ignore_val):
             self._bind_tooltip(w, lambda: str(self._ignore_path) if self._ignore_path else None)
-
-        # Convert mode file pickers (hidden by default)
-        self._conv_fp = tk.Frame(fp_container, bg=BG)
-        self._convert_in_var  = tk.StringVar(value="尚未選取")
-        self._convert_out_var = tk.StringVar(value="尚未選取")
-        self._conv_in_row  = self._make_file_row(
-            self._conv_fp, "📊 掃描報告:", self._convert_in_var, self._pick_convert_in, row=0)
-        self._conv_out_row = self._make_file_row(
-            self._conv_fp, "💾 Ignore 輸出:", self._convert_out_var, self._pick_convert_out,
-            row=1, is_save=True)
-        self._bind_row_tooltip(self._conv_in_row,  lambda: str(self._convert_in_path)  if self._convert_in_path  else None)
-        self._bind_row_tooltip(self._conv_out_row, lambda: str(self._convert_out_path) if self._convert_out_path else None)
 
         # Diff mode file pickers (hidden by default)
         self._diff_fp = tk.Frame(fp_container, bg=BG)
@@ -2723,13 +2587,6 @@ class App(tk.Tk):
                                        activeforeground="white", relief="flat",
                                        padx=20, pady=8, cursor="hand2",
                                        command=self._run_scan)
-        self._convert_run_btn = tk.Button(run_row, text="▶  轉換",
-                                          font=("Microsoft JhengHei UI", 14, "bold"),
-                                          bg=_RUN_BG, fg="white",
-                                          activebackground=_RUN_BG_ACT,
-                                          activeforeground="white", relief="flat",
-                                          padx=20, pady=8, cursor="hand2",
-                                          command=self._run_convert)
         self._diff_run_btn = tk.Button(run_row, text="▶  比對",
                                        font=("Microsoft JhengHei UI", 14, "bold"),
                                        bg=_RUN_BG, fg="white",
@@ -2749,7 +2606,7 @@ class App(tk.Tk):
                                      activeforeground="white", relief="flat",
                                      padx=20, pady=8, cursor="hand2",
                                      command=self._cancel_run)
-        # Don't pack scan_run_btn, convert_run_btn, or cancel_btn here — _set_mode / _finish_run controls visibility
+        # Don't pack scan_run_btn or cancel_btn here — _set_mode / _finish_run controls visibility
 
         # ── RIGHT COLUMN ──────────────────────────────────────────────────────
         right = tk.Frame(body, bg="#27273a")
@@ -2804,25 +2661,6 @@ class App(tk.Tk):
         # ── Scan panel (right) ────────────────────────────────────────────────
         self._scan_panel = tk.Frame(right, bg="#27273a")
         # shown/hidden by _set_mode
-
-        # ── Convert panel (right) ─────────────────────────────────────────────
-        self._convert_panel = tk.Frame(right, bg="#27273a")
-        tk.Label(self._convert_panel, text="📋  轉換掃描報告為 Ignore Excel",
-                 font=("Microsoft JhengHei UI", 12, "bold"), fg="#a6adc8", bg="#27273a").pack(anchor="w")
-        tk.Label(self._convert_panel,
-                 text=(
-                     "將語言掃描報告（含 「<語言> Extracted」Sheet）\n"
-                     "一鍵轉換成可直接套用的 Ignore Excel。\n\n"
-                     "運作規則：\n"
-                     "  • 自動偵測所有 「X Extracted」格式的 Sheet\n"
-                     "  • 只收錄 Comment = Pass 的列\n"
-                     "  • 每個 Sheet 只記錄該 Sheet 自己的語言\n"
-                     "    （忽略「語言」欄可能包含的多語言值）\n"
-                     "  • 多個 Key 同格（換行分隔）自動拆分\n"
-                     "  • 同一 Key 多語言皆 Pass → 合併為同一列"
-                 ),
-                 font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a",
-                 justify="left").pack(anchor="w", pady=(6, 0))
 
         # ── Diff panel (right) ────────────────────────────────────────────────
         self._diff_panel = tk.Frame(right, bg="#27273a")
@@ -3033,10 +2871,10 @@ class App(tk.Tk):
                 text="  ".join(cfg.keys()) if cfg else "（全部語言）"
             )
 
-        # Disable/enable convert + xplat modes for Web
+        # Disable/enable xplat mode for Web
         if hasattr(self, '_mode_buttons'):
             is_web = (app_name == "Web")
-            for _mname in ("convert", "xplat"):
+            for _mname in ("xplat",):
                 _mb = self._mode_buttons.get(_mname)
                 if not _mb:
                     continue
@@ -3068,7 +2906,6 @@ class App(tk.Tk):
             # Load this app's saved paths (don't clear — restore from config)
             self._zip_path = self._excel_path = self._out_path = self._ignore_path = None
             self._scan_out_path = None
-            self._convert_in_path = self._convert_out_path = None
             self._zip_old_path = self._diff_out_path = None
             self._xplat_android_path = self._xplat_ios_path = self._xplat_out_path = None
             self._zip_var.set("尚未選取")
@@ -3076,8 +2913,6 @@ class App(tk.Tk):
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
             self._ignore_var.set("未設定（可選）")
             self._scan_out_var.set("尚未選取")
-            self._convert_in_var.set("尚未選取")
-            self._convert_out_var.set("尚未選取")
             self._zip_old_var.set("尚未選取")
             self._diff_out_var.set("尚未選取")
             self._xplat_android_var.set("尚未選取")
@@ -3102,8 +2937,6 @@ class App(tk.Tk):
                 self._scan_out_path = Path(scan_out)
                 self._scan_out_var.set(self._fmt_name(Path(scan_out).name))
 
-            _try_set(app_cfg.get("convert_in"),  self._convert_in_var,  "_convert_in_path")
-            _try_set(app_cfg.get("convert_out"), self._convert_out_var, "_convert_out_path")
             _try_set(app_cfg.get("zip_old"),       self._zip_old_var,       "_zip_old_path")
             _try_set(app_cfg.get("diff_out"),      self._diff_out_var,      "_diff_out_path")
             _try_set(app_cfg.get("xplat_android"), self._xplat_android_var, "_xplat_android_path")
@@ -3189,8 +3022,8 @@ class App(tk.Tk):
         self._mode_var.set(mode)
         is_web = hasattr(self, '_app_var') and self._app_var.get() == "Web"
         for val, btn in self._mode_buttons.items():
-            if val == "convert" and is_web:
-                # Keep convert button visually disabled on Web regardless of mode
+            if val == "xplat" and is_web:
+                # Keep xplat button visually disabled on Web regardless of mode
                 btn.configure(bg="#1e1e2e", fg="#3d3d55", cursor="",
                               activebackground="#1e1e2e", activeforeground="#3d3d55",
                               command=lambda: None)
@@ -3205,8 +3038,6 @@ class App(tk.Tk):
         if hasattr(self, '_run_btn') and hasattr(self, '_scan_run_btn'):
             self._run_btn.pack_forget()
             self._scan_run_btn.pack_forget()
-            if hasattr(self, '_convert_run_btn'):
-                self._convert_run_btn.pack_forget()
             if hasattr(self, '_diff_run_btn'):
                 self._diff_run_btn.pack_forget()
             if hasattr(self, '_xplat_run_btn'):
@@ -3215,24 +3046,19 @@ class App(tk.Tk):
                 self._run_btn.pack(side="left", padx=(0, 8))
             elif mode == "scan":
                 self._scan_run_btn.pack(side="left")
-            elif mode == "convert":
-                self._convert_run_btn.pack(side="left")
             elif mode == "xplat":
                 self._xplat_run_btn.pack(side="left")
             else:
                 self._diff_run_btn.pack(side="left")
 
         # Show/hide file picker panels based on mode
-        if hasattr(self, '_std_fp') and hasattr(self, '_conv_fp'):
+        if hasattr(self, '_std_fp'):
             self._std_fp.pack_forget()
-            self._conv_fp.pack_forget()
             if hasattr(self, '_diff_fp'):
                 self._diff_fp.pack_forget()
             if hasattr(self, '_xplat_fp'):
                 self._xplat_fp.pack_forget()
-            if mode == "convert":
-                self._conv_fp.pack(fill="x")
-            elif mode == "diff":
+            if mode == "diff":
                 self._diff_fp.pack(fill="x")
             elif mode == "xplat":
                 self._xplat_fp.pack(fill="x")
@@ -3247,15 +3073,13 @@ class App(tk.Tk):
 
         if not init:
             # Hide all right panels first
-            for _p in ("_excel_panel", "_scan_panel", "_convert_panel", "_diff_panel", "_xplat_panel"):
+            for _p in ("_excel_panel", "_scan_panel", "_diff_panel", "_xplat_panel"):
                 if hasattr(self, _p):
                     getattr(self, _p).pack_forget()
             if mode == "excel":
                 self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
             elif mode == "scan":
                 self._scan_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
-            elif mode == "convert":
-                self._convert_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             elif mode == "xplat":
                 self._xplat_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             else:  # diff
@@ -3358,30 +3182,6 @@ class App(tk.Tk):
             self._scan_out_var.set(self._fmt_name(Path(p).name))
             self._save_app_paths()
 
-    # ── Convert Ignore pickers & run ─────────────────────────────────────────
-
-    def _pick_convert_in(self):
-        p = filedialog.askopenfilename(title="選取語言掃描報告",
-                                       filetypes=[("Excel files", "*.xlsx *.xls"),
-                                                  ("All files", "*.*")])
-        if p:
-            self._convert_in_path = Path(p)
-            self._convert_in_var.set(self._fmt_name(Path(p).name))
-            if not self._convert_out_path:
-                default = Path(p).parent / (Path(p).stem + "_ignore.xlsx")
-                self._convert_out_path = default
-                self._convert_out_var.set(self._fmt_name(default.name))
-            self._save_app_paths()
-
-    def _pick_convert_out(self):
-        p = filedialog.asksaveasfilename(title="選取 Ignore Excel 輸出路徑",
-                                          defaultextension=".xlsx",
-                                          filetypes=[("Excel files", "*.xlsx")])
-        if p:
-            self._convert_out_path = Path(p)
-            self._convert_out_var.set(self._fmt_name(Path(p).name))
-            self._save_app_paths()
-
     def _ask_file_exists(self, existing: Path) -> Path | None:
         """
         Show a 4-button dialog when output file already exists.
@@ -3443,56 +3243,6 @@ class App(tk.Tk):
             )
             return Path(p) if p else None
         return None   # cancel
-
-    def _run_convert(self):
-        if self._busy: return
-        if not self._convert_in_path:
-            messagebox.showwarning("提示", "請先選取語言掃描報告"); return
-
-        out_path = self._convert_out_path
-        if not out_path:
-            out_path = self._convert_in_path.parent / (self._convert_in_path.stem + "_ignore.xlsx")
-            self._convert_out_path = out_path
-            self._convert_out_var.set(self._fmt_name(out_path.name))
-
-        # ── 防呆：輸出檔已存在 ────────────────────────────────────────────────
-        if out_path.exists():
-            resolved = self._ask_file_exists(out_path)
-            if resolved is None:
-                return
-            out_path = resolved
-            self._convert_out_path = out_path
-            self._convert_out_var.set(self._fmt_name(out_path.name))
-            self._save_app_paths()
-
-        self._set_busy(True)
-        self._cancel_event.clear()
-        self._convert_run_btn.configure(state="disabled")
-        self._convert_run_btn.pack_forget()
-        self._cancel_btn.pack(side="left")
-        self._progress.configure(mode="indeterminate")
-        self._progress.start(12)
-        self._progress_label.configure(text="")
-        self._log_box.configure(state="normal")
-        self._log_box.delete("1.0", "end")
-        self._log_box.configure(state="disabled")
-
-        in_path = self._convert_in_path
-
-        def worker():
-            try:
-                n = convert_scan_to_ignore(in_path, out_path, self._log)
-                self._log(f"\n🎉 完成！共 {n} 筆，已儲存至:\n   {out_path}")
-                self.after(0, self._notify_done, out_path, "Ignore Excel 已產生！")
-            except Exception as ex:
-                import traceback
-                self._log(f"❌ 發生錯誤: {ex}", "err")
-                self._log(traceback.format_exc(), "err")
-                self.after(0, self._notify_error, str(ex))
-            finally:
-                self.after(0, self._finish_run, self._convert_run_btn)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     # ── Scan run ─────────────────────────────────────────────────────────────
 
