@@ -10,11 +10,20 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.10.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.11.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.11
+────────────────────────────────────────
+Bug 修正
+  • 比對新字串：新舊版比對只看「英文字串文字」是否全域出現過，沒有考量 Module，
+    導致新 Module 若重複使用其他舊 Module 已有的英文字串（如 UNLOCK、FACE 等常見字），
+    會被誤判為「非新增」而漏報 → 改為以 (Module, 英文字串) 為比對單位，同一字串只要
+    在該 Module 裡是新的就會列出，不受其他 Module 影響
+
+────────────────────────────────────────
 v2.10
 ────────────────────────────────────────
 功能調整
@@ -1292,23 +1301,27 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
 
 def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
                  cancel_event=None, has_module: bool = True):
-    """Compare two pre-built indexes; write strings added in new_index vs old_index."""
-    old_keys = set(old_index.keys())
-    new_keys = set(new_index.keys())
-    added    = sorted(new_keys - old_keys)
-    log(f"📊 舊版: {len(old_keys)} 個字串 / 新版: {len(new_keys)} 個字串 / 新增: {len(added)} 個")
+    """Compare two pre-built indexes; write strings added in new_index vs old_index.
+    Newness is judged per (module, EN string) pair, not by EN string alone —
+    an EN string already used in some other module must still be reported as
+    new if this specific module didn't have it before (e.g. a brand-new module
+    reusing common UI text like "Cancel" from an unrelated existing module)."""
+    old_pairs = {(module, en) for en, proj_data in old_index.items() for module in proj_data}
+    new_pairs = {(module, en) for en, proj_data in new_index.items() for module in proj_data}
+    added     = sorted(new_pairs - old_pairs)
+    log(f"📊 舊版: {len(old_pairs)} 個 (Module,字串) 組合 / 新版: {len(new_pairs)} 個 / 新增: {len(added)} 個")
 
     rows = []
-    for en in added:
+    for module, en in added:
         if cancel_event and cancel_event.is_set():
             log("⚠️  已取消"); return
-        for module, proj_data in sorted(new_index[en].items()):
-            keys = proj_data.get("_all_keys", [])
-            for key in (keys or [""]):
-                if has_module:
-                    rows.append((module, en, key))
-                else:
-                    rows.append((en, key))
+        proj_data = new_index[en][module]
+        keys = proj_data.get("_all_keys", [])
+        for key in (keys or [""]):
+            if has_module:
+                rows.append((module, en, key))
+            else:
+                rows.append((en, key))
 
     if has_module:
         rows.sort(key=lambda x: (x[0], x[1], x[2]))
