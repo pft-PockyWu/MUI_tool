@@ -10,11 +10,20 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.11.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.12.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.12
+────────────────────────────────────────
+Bug 修正
+  • 翻譯字串中夾雜零星控制字元（如 \\x10，肉眼看不到）時，整句被誤判為「亂碼」，
+    在報告中顯示為「未翻譯 / 空白」（例如 ymk-ios-doc 的 "1. Look straight for frontal
+    photo" 在 CHT/CHS 其實有翻）→ 改為：仍有正常文字就視為已翻譯，只有全是控制字元、
+    空白、含 U+FFFD 或問號過多時才算亂碼
+
+────────────────────────────────────────
 v2.11
 ────────────────────────────────────────
 Bug 修正
@@ -741,7 +750,7 @@ def parse_android_xml(text: str) -> dict:
 
     return entries
 
-GARBLED_RE = re.compile(r'[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f]')
+GARBLED_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 
 # Characters illegal in Excel XML (openpyxl will raise IllegalCharacterError)
 _XL_ILLEGAL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff]')
@@ -767,7 +776,9 @@ def _unesc_nl(s: str) -> str:
 
 def is_garbled(val: str) -> bool:
     if not val or not val.strip(): return True
-    if GARBLED_RE.search(val): return True
+    if '�' in val: return True
+    # 夾雜零星控制字元（如 \x10）但仍有正常文字 → 視為已翻譯；只剩控制字元才算亂碼
+    if not GARBLED_RE.sub('', val).strip(): return True
     if len(val) > 3 and val.count('?') > len(val) * 0.4: return True
     return False
 
