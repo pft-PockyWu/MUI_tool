@@ -10,11 +10,32 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.12.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.13.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.13
+────────────────────────────────────────
+新功能
+  • 比對新字串報告新增 C 欄「Max String Length」、D 欄「Max String Line」（Key 移到 E 欄）：
+    讀取該 Module spec.json 裡該 key 的 count / lines，沒有設定就留空（Web 無 spec.json，版面不變）
+  • 字數上限檢查：字串含變數（{} 如 Expires in {count, plural, =1{1 day} other{{count} days}}，
+    或 %@、%d、%1$s 等 printf 格式）超過上限時，因實際顯示長度會隨變數內容變動，無法精確判斷 → 改用紫色另外標示並註明原因
+    → 翻譯對照 sheet：紫色粗體字，字尾標示「(字數，含變數)」
+    → 翻譯問題報告 / 語言掃描報告：問題類型「超過字數上限（含變數，無法精確判斷）」紫底
+    → 快速查詢：顯示「⚠️含變數，字數可能超過上限(上限值)，無法精確判斷」
+    → 說明 sheet 色彩圖例同步新增
+
+Bug 修正
+  • 語言全掃描 / Excel 查詢：來源字串（ENU 翻譯檔字串）本身不是英文（如 lib-widget-doc
+    的中文「不同意」、bipa_* 等）本來就不會被翻譯，卻被報成「與英文翻譯檔相同」→ 改為
+    來源字串以非拉丁字母為主時，不報「未翻譯 / 空白」與「與英文翻譯檔相同」
+    → 語言掃描報告、翻譯問題報告：整筆略過
+    → 翻譯對照 sheet：各語言格不標紅
+    （超過字數上限檢查不受影響；快速查詢維持原樣）
+
+────────────────────────────────────────
 v2.12
 ────────────────────────────────────────
 Bug 修正
@@ -782,6 +803,15 @@ def is_garbled(val: str) -> bool:
     if len(val) > 3 and val.count('?') > len(val) * 0.4: return True
     return False
 
+def _is_non_english(s: str) -> bool:
+    """True when most letters are non-Latin (e.g. a Chinese source string). Such
+    strings are never sent for translation, so same-as-English checks don't apply."""
+    letters = [c for c in s if c.isalpha()]
+    if not letters:
+        return False
+    non_latin = sum(1 for c in letters if not unicodedata.name(c, "").startswith("LATIN"))
+    return non_latin * 2 > len(letters)
+
 def _visual_len(s: str) -> int:
     """
     Visual display width:
@@ -813,6 +843,23 @@ def _spec_lines(spec: dict, key: str):
             return int(lines)
     return None
 
+LEN_ISSUE     = "超過字數上限"
+LEN_VAR_ISSUE = "超過字數上限（含變數，無法精確判斷）"
+
+def _has_var(s: str) -> bool:
+    """String contains a {placeholder} (incl. ICU plural) or printf-style %@ / %d / %1$s — its
+    runtime length differs from the raw text."""
+    if not isinstance(s, str):
+        return False
+    if "{" in s and "}" in s:
+        return True
+    s = s.replace("%%", "")   # 字面 %，不是變數
+    return bool(_RE_PRINTF.search(s) or _RE_PRINTF2.search(s))
+
+def _len_issue(s: str) -> str:
+    """Issue label for an over-limit string: variable-bearing strings can't be judged exactly."""
+    return LEN_VAR_ISSUE if _has_var(s) else LEN_ISSUE
+
 def _len_flag(all_keys: list, spec: dict, val: str) -> str:
     """Compact 快速查詢 marker when val's visual length exceeds any key's spec.json limit."""
     limits = []
@@ -820,7 +867,11 @@ def _len_flag(all_keys: list, spec: dict, val: str) -> str:
         lim = _spec_limit(spec, k)
         if lim is not None and _visual_len(val) > lim:
             limits.append(lim)
-    return f"  ⚠️超過字數上限({min(limits)})" if limits else ""
+    if not limits:
+        return ""
+    if _has_var(val):
+        return f"  ⚠️含變數，字數可能超過上限({min(limits)})，無法精確判斷"
+    return f"  ⚠️超過字數上限({min(limits)})"
 
 def _limit_cell(spec: dict, key: str, exp_count, exp_lines):
     """字數上限 column value for 翻譯對照.
@@ -1139,7 +1190,6 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
     Output: one report sheet grouped by Module.
     """
     lang_label = {v: k for k, v in target_langs.items()} if target_langs else {}
-    LEN_ISSUE = "超過字數上限"
 
     log(f"🔎 掃描語言: {[lang_label.get(l, l) for l in scan_langs]}")
 
@@ -1174,8 +1224,9 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                             if enu_val and _visual_len(enu_val) > lim]
             if en_over_keys:
                 len_keys_str = "\n".join(_esc_nl(k) for k in en_over_keys)
-                len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
-                               else (enu_val, LEN_ISSUE, len_keys_str))
+                _li = _len_issue(enu_val)
+                len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
+                               else (enu_val, _li, len_keys_str))
                 bucket = groups.setdefault(len_grp_key, [])
                 if "ENU" not in bucket:
                     bucket.append("ENU")
@@ -1189,11 +1240,15 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                 if over_keys:
                     label = lang_label.get(lang, lang)
                     len_keys_str = "\n".join(_esc_nl(k) for k in over_keys)
-                    len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
-                                   else (enu_val, LEN_ISSUE, len_keys_str))
+                    _li = _len_issue(val)
+                    len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
+                                   else (enu_val, _li, len_keys_str))
                     bucket = groups.setdefault(len_grp_key, [])
                     if label not in bucket:
                         bucket.append(label)
+
+        if _is_non_english(enu_val):
+            continue   # 來源不是英文 → 不會被翻譯，不報未翻譯 / 與英文相同
 
         for lang in scan_langs:
             if lang == "en": continue
@@ -1236,6 +1291,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         "未翻譯 / 空白":    "FF6B6B",
         "與英文翻譯檔相同": "FFD740",
         LEN_ISSUE:         "64B5F6",
+        LEN_VAR_ISSUE:     "B39DDB",
     }
 
     wb = Workbook()
@@ -1295,16 +1351,16 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         rpt.column_dimensions["B"].width = 44
         rpt.column_dimensions["C"].width = 36
         rpt.column_dimensions["D"].width = 32
-        rpt.column_dimensions["E"].width = 22
+        rpt.column_dimensions["E"].width = 40
         rpt.freeze_panes = "A2"
-        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 40}, content_cols={"B", "C"})
     else:
         rpt.column_dimensions["A"].width = 50
         rpt.column_dimensions["B"].width = 36
         rpt.column_dimensions["C"].width = 32
-        rpt.column_dimensions["D"].width = 22
+        rpt.column_dimensions["D"].width = 40
         rpt.freeze_panes = "A2"
-        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 22}, content_cols={"A", "B"})
+        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 40}, content_cols={"A", "B"})
 
     wb.save(str(output_xlsx))
     log(f"✅ 輸出完成: {output_xlsx.name}")
@@ -1328,14 +1384,15 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
             log("⚠️  已取消"); return
         proj_data = new_index[en][module]
         keys = proj_data.get("_all_keys", [])
+        spec = proj_data.get("_spec", {})
         for key in (keys or [""]):
             if has_module:
-                rows.append((module, en, key))
+                rows.append((module, en, _spec_limit(spec, key), _spec_lines(spec, key), key))
             else:
                 rows.append((en, key))
 
     if has_module:
-        rows.sort(key=lambda x: (x[0], x[1], x[2]))
+        rows.sort(key=lambda x: (x[0], x[1], x[4]))
     else:
         rows.sort(key=lambda x: (x[0], x[1]))
 
@@ -1345,7 +1402,8 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
     ws = wb.active
     ws.title = "新增字串"
 
-    _hdrs = ["Module", "New Strings (EN)", "Key"] if has_module else ["New Strings (EN)", "Key"]
+    _hdrs = (["Module", "New Strings (EN)", "Max String Length", "Max String Line", "Key"]
+             if has_module else ["New Strings (EN)", "Key"])
     for ci, h in enumerate(_hdrs, 1):
         c = ws.cell(row=1, column=ci, value=h)
         c.fill = HEADER; c.font = H_FONT; c.alignment = CENTER; c.border = BORDER
@@ -1354,7 +1412,8 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
     for ri, row_vals in enumerate(rows, 2):
         for ci, v in enumerate(row_vals, 1):
             c = ws.cell(row=ri, column=ci, value=_xl_safe(_esc_nl(v)))
-            c.font = D_FONT; c.alignment = LEFT; c.border = BORDER
+            c.font = D_FONT; c.border = BORDER
+            c.alignment = CENTER if has_module and ci in (3, 4) else LEFT
             if ri % 2 == 0:
                 c.fill = _alt_fill
 
@@ -1363,8 +1422,10 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
     if has_module:
         ws.column_dimensions["A"].width = 38
         ws.column_dimensions["B"].width = 44
-        ws.column_dimensions["C"].width = 44
-        col_widths = {"A": 38, "B": 44, "C": 44}
+        ws.column_dimensions["C"].width = 20
+        ws.column_dimensions["D"].width = 20
+        ws.column_dimensions["E"].width = 44
+        col_widths = {"A": 38, "B": 44, "C": 20, "D": 20, "E": 44}
     else:
         ws.column_dimensions["A"].width = 50
         ws.column_dimensions["B"].width = 44
@@ -1372,7 +1433,7 @@ def compare_zips(old_index: dict, new_index: dict, output_xlsx: Path, log,
     ws.freeze_panes = "A2"
     if rows:
         ws.auto_filter.ref = f"A1:{last_col}{len(rows)+1}"
-    _auto_row_height(ws, col_widths, content_cols={"A", "B"} if not has_module else {"B", "C"})
+    _auto_row_height(ws, col_widths, content_cols={"A", "B"} if not has_module else {"B", "E"})
 
     wb.save(str(output_xlsx))
     log(f"✅ 輸出完成: {output_xlsx.name}（{len(rows)} 列，{len(added)} 個新字串）")
@@ -1764,8 +1825,8 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         c.alignment, c.border = CENTER, BORDER
     rpt.row_dimensions[1].height = 24
 
-    LEN_ISSUE = "超過字數上限"
-    ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740", LEN_ISSUE: "64B5F6"}
+    ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740", LEN_ISSUE: "64B5F6",
+                    LEN_VAR_ISSUE: "B39DDB"}
     rpt_groups: dict[tuple, list] = OrderedDict()
 
     for rd in rows_data:
@@ -1780,22 +1841,25 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         # Char-count limit check (spec.json) — independent of the checks below
         limit = _spec_limit(spec, key_name)
         if limit is not None:
-            over_labels = []
+            over_by_issue: dict[str, list] = {}
             if enu_val and _visual_len(enu_val) > limit:
-                over_labels.append("ENU")
+                over_by_issue.setdefault(_len_issue(enu_val), []).append("ENU")
             for lang in sorted_langs:
                 if lang == "en": continue
                 val = trans.get(lang, "")
                 if val and not is_garbled(val) and _visual_len(val) > limit:
-                    over_labels.append(lang_label.get(lang, lang))
-            if over_labels:
+                    over_by_issue.setdefault(_len_issue(val), []).append(lang_label.get(lang, lang))
+            for _li, over_labels in over_by_issue.items():
                 len_keys_str = _esc_nl(key_name)
-                len_grp_key = ((module, enu_val, LEN_ISSUE, len_keys_str) if has_module
-                               else (enu_val, LEN_ISSUE, len_keys_str))
+                len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
+                               else (enu_val, _li, len_keys_str))
                 bucket = rpt_groups.setdefault(len_grp_key, [])
                 for lbl in over_labels:
                     if lbl not in bucket:
                         bucket.append(lbl)
+
+        if _is_non_english(enu_val):
+            continue   # 來源不是英文 → 不會被翻譯，不報未翻譯 / 與英文相同
 
         for lang in sorted_langs:
             if lang == "en": continue
@@ -1866,16 +1930,16 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         rpt.column_dimensions["B"].width = 44
         rpt.column_dimensions["C"].width = 36
         rpt.column_dimensions["D"].width = 32
-        rpt.column_dimensions["E"].width = 22
+        rpt.column_dimensions["E"].width = 40
         rpt.freeze_panes = "A2"
-        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 22}, content_cols={"B", "C"})
+        _auto_row_height(rpt, {"A": 40, "B": 44, "C": 36, "D": 32, "E": 40}, content_cols={"B", "C"})
     else:
         rpt.column_dimensions["A"].width = 50
         rpt.column_dimensions["B"].width = 36
         rpt.column_dimensions["C"].width = 32
-        rpt.column_dimensions["D"].width = 22
+        rpt.column_dimensions["D"].width = 40
         rpt.freeze_panes = "A2"
-        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 22}, content_cols={"A", "B"})
+        _auto_row_height(rpt, {"A": 50, "B": 36, "C": 32, "D": 40}, content_cols={"A", "B"})
     return len(sorted_groups), sum(len(v) for v in rpt_groups.values())
 
 
@@ -1889,24 +1953,28 @@ def _build_legend_sheet(wb):
         ("  橘色字", "模糊比對（Excel 數字對應翻譯檔變數，hover 看原始字串）"),
         ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
         ("  粉紅色粗體字", "翻譯超過字數上限（僅該 key 有 spec.json 設定時顯示，字尾括號為目前字數）"),
+        ("  紫色粗體字", "超過字數上限，但字串含變數（{} 或 %@、%d、%1$s 等），實際長度會隨變數內容變動，無法精確判斷（字尾標示「含變數」）"),
         ("", ""),
         ("翻譯問題報告色彩", ""),
         ("  紅底", "未翻譯 / 空白"),
         ("  黃底", "與英文翻譯檔相同（ENU）"),
         ("  藍底", "超過字數上限（module 內 spec.json 設定的字數限制）"),
+        ("  紫底", "超過字數上限，但字串含變數（{} 或 %@、%d、%1$s 等），無法精確判斷（需人工確認實際顯示長度）"),
         ("", ""), ("語言代碼", "語言名稱"),
     ] + list(LANG_NAMES.items()), 1):
         ca = ls.cell(row=ri, column=1, value=a)
         cb = ls.cell(row=ri, column=2, value=b)
-        bold = ri in (1, 8, 13)
+        bold = ri in (1, 9, 15)
         ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         if ri == 2:  ca.fill = YELLOW
         if ri == 3:  ca.fill = RED
         if ri == 6:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
-        if ri == 9:  ca.fill = PatternFill("solid", fgColor="FF6B6B")
-        if ri == 10: ca.fill = PatternFill("solid", fgColor="FFD740")
-        if ri == 11: ca.fill = PatternFill("solid", fgColor="64B5F6")
+        if ri == 7:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="7E57C2")
+        if ri == 10: ca.fill = PatternFill("solid", fgColor="FF6B6B")
+        if ri == 11: ca.fill = PatternFill("solid", fgColor="FFD740")
+        if ri == 12: ca.fill = PatternFill("solid", fgColor="64B5F6")
+        if ri == 13: ca.fill = PatternFill("solid", fgColor="B39DDB")
     ls.column_dimensions["A"].width = 22
     ls.column_dimensions["B"].width = 55
 
@@ -2071,6 +2139,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     NF_FONT       = Font(name="Microsoft JhengHei UI", size=9, color="cc4400", bold=True)
     DIM_FONT      = Font(name="Microsoft JhengHei UI", size=10, color="aaaaaa")
     LEN_FONT      = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
+    LEN_VAR_FONT  = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="7E57C2")
     GROUP_TOP     = Border(left=thin, right=thin,
                            top=Side(style="medium", color="302B63"),
                            bottom=Side(style="thin", color="DDDDDD"))
@@ -2184,18 +2253,23 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             if limit is not None and val and not is_garbled(val):
                 vlen       = _visual_len(val)
                 over_limit = vlen > limit
-                cell_text  = f"{cell_text} ({vlen})"
+                cell_text  = (f"{cell_text} ({vlen}，含變數)" if over_limit and _has_var(val)
+                              else f"{cell_text} ({vlen})")
 
             c = ws.cell(row=ri, column=ci, value=cell_text)
             c.alignment, c.border = LEFT, border
+            src_non_en = _is_non_english(enu_val or en_val)   # 來源非英文 → 不會被翻譯，不標紅
             if not val or is_garbled(val):
-                c.fill, c.font = RED, D_FONT
+                if src_non_en and not is_base:
+                    c.font = D_FONT
+                else:
+                    c.fill, c.font = RED, D_FONT
             elif not is_base and (
                 val.strip() == en_val.strip()
                 or (enu_val and val.strip() == enu_val.strip())
             ):
                 module = rd.get("module", "")
-                if ignore_set and _in_ignore(ignore_set, module, key_name, lang):
+                if src_non_en or (ignore_set and _in_ignore(ignore_set, module, key_name, lang)):
                     c.font = D_FONT
                 else:
                     c.fill, c.font = RED, D_FONT
@@ -2208,7 +2282,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             else:
                 c.font = D_FONT
             if over_limit:
-                c.font = LEN_FONT
+                c.font = LEN_VAR_FONT if _has_var(val) else LEN_FONT
 
         # Not-found strings come from the server — expand one row per language
         if rd["not_found"] and rd["is_first"]:
