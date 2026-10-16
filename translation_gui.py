@@ -10,11 +10,20 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.13.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.14.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.14
+────────────────────────────────────────
+Bug 修正
+  • Web App：語言「自動偵測」其實只認內建對照表裡的語言檔，zip 裡有但表上沒有的語言
+    （如 es_ES.json 西班牙文）會被悄悄略過 → 改為真正自動偵測：zip 內所有 xx_XX.json
+    都會被當成語言掃描；已知語言沿用原代碼（新增 es_ES → ESP），表外的新語言由檔名
+    自動推導代碼並在 log 提示，之後 web zip 再新增語言不用改程式
+
+────────────────────────────────────────
 v2.13
 ────────────────────────────────────────
 新功能
@@ -573,7 +582,7 @@ _WEB_LOCALE_TO_CODE: dict[str, str] = {
     "sv_SE": "SWE",  "el_GR": "ELL",  "ro_RO": "RON",  "uk_UA": "UKR",
     "bg_BG": "BUL",  "hr_HR": "HRV",  "da_DK": "DAN",  "gn_PY": "GRN",
     "vi_VN": "VIE",  "hi_IN": "HIN",  "ta_IN": "TAM",  "fa_IR": "FAR",
-    "af_ZA": "AFR",
+    "af_ZA": "AFR",  "es_ES": "ESP",
 }
 # locale filename stem → ISO lang code  (e.g. "ar_AE" → "ar")
 _WEB_LOCALE_TO_LANG: dict[str, str] = {
@@ -585,8 +594,27 @@ _WEB_LOCALE_TO_LANG: dict[str, str] = {
     "sv_SE": "sv",      "el_GR": "el",        "ro_RO": "ro",       "uk_UA": "uk",
     "bg_BG": "bg",      "hr_HR": "hr",        "da_DK": "da",       "gn_PY": "gn",
     "vi_VN": "vi",      "hi_IN": "hi",        "ta_IN": "ta",       "fa_IR": "fa",
-    "af_ZA": "af",
+    "af_ZA": "af",      "es_ES": "es",
 }
+_WEB_LOCALE_RE = re.compile(r'^[a-z]{2,3}_[A-Z]{2}$')
+
+def _web_locale_entries(names) -> list:
+    """[(stem, code, lang, known)] for every locale file (xx_XX.json) found, excluding en_US.
+    Known locales use the tables above (stable order); any other locale file is picked up
+    automatically — lang/code derived from the filename — so new zip languages are never skipped."""
+    stems = {n[:-5] for n in names if n.endswith(".json") and _WEB_LOCALE_RE.match(n[:-5])}
+    stems.discard("en_US")
+    out = [(st, _WEB_LOCALE_TO_CODE[st], _WEB_LOCALE_TO_LANG[st], True)
+           for st in _WEB_LOCALE_TO_CODE if st in stems]
+    used_codes = {e[1] for e in out} | {"ENU"}
+    used_langs = {e[2] for e in out} | {"en"}
+    for st in sorted(stems - set(_WEB_LOCALE_TO_CODE)):
+        lang_part, region = st.split("_")
+        lang = lang_part if lang_part not in used_langs else f"{lang_part}-{region}"
+        code = lang.upper().replace("-", "")
+        used_codes.add(code); used_langs.add(lang)
+        out.append((st, code, lang, False))
+    return out
 
 def _is_web_zip(zip_path: Path) -> bool:
     """Return True if zip contains en_US.json (web translation format)."""
@@ -605,10 +633,8 @@ def _detect_web_langs_from_zip(zip_path: Path) -> dict:
     try:
         with zipfile.ZipFile(zip_path) as zf:
             names = {Path(n).name for n in zf.namelist()}
-        for stem, code in _WEB_LOCALE_TO_CODE.items():
-            if stem == "en_US": continue
-            if stem + ".json" in names:
-                result[code] = _WEB_LOCALE_TO_LANG[stem]
+        for _stem, code, lang, _known in _web_locale_entries(names):
+            result[code] = lang
     except Exception:
         pass
     return result
@@ -1070,11 +1096,10 @@ def build_web_index(source: Path, log) -> tuple:
         lang_data: dict = {}   # lang_code → {key: value}
         detected: dict  = {}   # internal_code → lang_code
 
-        for stem, code in _WEB_LOCALE_TO_CODE.items():
-            if stem == "en_US": continue
+        for stem, code, lc, known in _web_locale_entries(all_names):
             fname = stem + ".json"
-            if fname not in all_names: continue
-            lc = _WEB_LOCALE_TO_LANG[stem]
+            if not known:
+                log(f"ℹ️  自動偵測到新語言檔 {fname} → {code}（{lc}）")
             try:
                 data = json.loads(_decode_bytes(zf.read(all_names[fname])))
             except Exception:
