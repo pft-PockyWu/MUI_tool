@@ -10,11 +10,36 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.14.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.15.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.15
+────────────────────────────────────────
+新功能
+  • Web App 支援 Ignore Excel（原本 Web 下按鈕停用、顯示「Web 不支援」）：Excel 查詢、
+    語言全掃描、快速查詢皆會套用。Web 沒有 Module 概念，Ignore 表改以「Key + 語言」比對，
+    Module 欄有填無填皆可（會被忽略）；欄位依標題文字自動辨識，以下格式都能直接用：
+    → 標準格式：Module | ENU 翻譯檔字串 | 問題 Key | 語言
+    → key-references 匯出檔：Module | Source Text (ENU) | Key | Language | Version
+    → Web 掃描／問題報告本身的欄位：ENU 翻譯檔字串 | 問題 Key | 語言 | 問題類型（可直接複製列使用）
+    語言欄同樣支援 ALL_LANGUAGES；缺少 Key 或語言欄時會在 log 提示
+  • 快速查詢（Web）：基準語言標示由「en」改為與其他 App 一致的「ENU」
+  • 語言全掃描模式也顯示快速查詢面板（排在掃描語言勾選下方），可直接查詢字串；
+    查詢語言沿用上方「選擇要掃描的語言」勾選（都沒勾 = 全部語言），不再重複顯示第二組勾選；
+    在掃描模式按快速查詢時，畫面會自動捲到結果所在的 log 區
+  • 預設視窗高度由 750 加高為 900（螢幕較小時自動縮小），底部 log 區不再太小
+
+Bug 修正
+  • Web 翻譯檔裡有些 key 的值是「圖檔路徑」（如 images/iapv3/ycp/tutorial_cover/enu_20220831.jpg，
+    各語言指向各自的在地化圖片），沒有自己圖片的語言沿用英文路徑，被誤報成「與英文翻譯檔相同」
+    → 來源字串是圖檔路徑（.jpg/.png/.webp/.gif/.svg 等結尾、不含空白）時，視同不可翻譯，
+    與「來源非英文」相同處理：語言掃描報告、翻譯問題報告整筆略過，翻譯對照 sheet 不標紅
+  • 切換模式 / 切換 App 後，內容高度改變但捲動範圍沒有重算，內容超出視窗高度時最下方
+    （log 區）捲不到 → 每次切換後重新計算捲動範圍
+
+────────────────────────────────────────
 v2.14
 ────────────────────────────────────────
 Bug 修正
@@ -838,6 +863,17 @@ def _is_non_english(s: str) -> bool:
     non_latin = sum(1 for c in letters if not unicodedata.name(c, "").startswith("LATIN"))
     return non_latin * 2 > len(letters)
 
+_IMAGE_PATH_RE = re.compile(r'^\S+\.(?:jpe?g|png|webp|gif|svg|bmp|ico|avif|heic)$', re.I)
+
+def _is_image_path(s: str) -> bool:
+    """Value is an image file path (e.g. web zip's localized tutorial-cover images)."""
+    return isinstance(s, str) and bool(_IMAGE_PATH_RE.match(s.strip()))
+
+def _is_untranslatable(s: str) -> bool:
+    """Source string that isn't translatable text: non-English source, or an image file path.
+    Same-as-English / untranslated checks don't apply to these."""
+    return _is_non_english(s) or _is_image_path(s)
+
 def _visual_len(s: str) -> int:
     """
     Visual display width:
@@ -1146,7 +1182,19 @@ def build_web_index(source: Path, log) -> tuple:
 
 # ── Ignore list loader ────────────────────────────────────────────────────────
 
-def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> set:
+def _web_ignore_cols(df) -> tuple:
+    """(key_col, lang_col) indexes for a Web ignore file. Web has no Module, so the layout varies:
+    standard Module|ENU|Key|語言, key-references Module|Source|Key|Language|Version, or the Web
+    report's own ENU|問題 Key|語言|問題類型. Find columns by header text, else fall back by position."""
+    heads = [str(c).strip().lower() for c in df.columns]
+    key_ci  = next((i for i, h in enumerate(heads) if "key" in h), None)
+    lang_ci = next((i for i, h in enumerate(heads) if "語言" in h or "language" in h or h == "lang"), None)
+    if key_ci is not None and lang_ci is not None:
+        return key_ci, lang_ci
+    return (2, 3) if heads and "module" in heads[0] else (1, 2)
+
+def load_ignore_list(path: Path, target_langs: dict | None = None, log=None,
+                     is_web: bool = False) -> set:
     """
     Parse ignore Excel with columns: Module | ENU翻譯檔字串 | 問題Key | 語言
     語言 column contains comma-separated lang codes (e.g. "HEB, POL, FIL")
@@ -1154,6 +1202,7 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> 
     Special value "ALL_LANGUAGES" skips the string for every language.
     Returns set of (module, key_name, lang_code) to skip in reports.
     Entries with ALL_LANGUAGES use lang_code="*" as a wildcard sentinel.
+    is_web: Web has no Module — the Module column (if any) is ignored and entries match by key+語言.
     """
     if not path or not path.exists():
         return set()
@@ -1169,12 +1218,20 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> 
 
     ignore: set = set()
     unknown_codes: set = set()
+    key_ci, lang_ci = _web_ignore_cols(df) if is_web else (2, 3)
+    if df.shape[1] <= max(key_ci, lang_ci):
+        if log:
+            log("⚠️  Ignore 表欄位不足，無法讀取（需要 Key 與 語言 欄）")
+        return set()
     for _, row in df.iterrows():
-        module    = str(row.iloc[0]).strip().lower() if pd_.notna(row.iloc[0]) else ""
-        key_name  = _unesc_nl(str(row.iloc[2]).strip()) if pd_.notna(row.iloc[2]) else ""
-        langs_str = str(row.iloc[3]).strip() if pd_.notna(row.iloc[3]) else ""
+        if is_web:
+            module = ""   # Web 沒有 Module 概念，統一以空字串比對
+        else:
+            module = str(row.iloc[0]).strip().lower() if pd_.notna(row.iloc[0]) else ""
+        key_name  = _unesc_nl(str(row.iloc[key_ci]).strip()) if pd_.notna(row.iloc[key_ci]) else ""
+        langs_str = str(row.iloc[lang_ci]).strip() if pd_.notna(row.iloc[lang_ci]) else ""
 
-        if not module or not key_name or not langs_str:
+        if (not module and not is_web) or not key_name or not langs_str:
             continue
 
         if langs_str.upper() == "ALL_LANGUAGES":
@@ -1272,7 +1329,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                     if label not in bucket:
                         bucket.append(label)
 
-        if _is_non_english(enu_val):
+        if _is_untranslatable(enu_val):
             continue   # 來源不是英文 → 不會被翻譯，不報未翻譯 / 與英文相同
 
         for lang in scan_langs:
@@ -1883,7 +1940,7 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
                     if lbl not in bucket:
                         bucket.append(lbl)
 
-        if _is_non_english(enu_val):
+        if _is_untranslatable(enu_val):
             continue   # 來源不是英文 → 不會被翻譯，不報未翻譯 / 與英文相同
 
         for lang in sorted_langs:
@@ -2283,7 +2340,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
 
             c = ws.cell(row=ri, column=ci, value=cell_text)
             c.alignment, c.border = LEFT, border
-            src_non_en = _is_non_english(enu_val or en_val)   # 來源非英文 → 不會被翻譯，不標紅
+            src_non_en = _is_untranslatable(enu_val or en_val)   # 來源非英文 → 不會被翻譯，不標紅
             if not val or is_garbled(val):
                 if src_non_en and not is_base:
                     c.font = D_FONT
@@ -2459,8 +2516,7 @@ class App(tk.Tk):
         _try_set(app_cfg.get("zip"),    self._zip_var,    "_zip_path")
         _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
         _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
-        if app != "Web":
-            _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+        _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
 
         scan_out = app_cfg.get("scan_out")
         if scan_out and Path(scan_out).parent.exists():
@@ -2744,15 +2800,17 @@ class App(tk.Tk):
         tk.Label(self._excel_panel, text="每行一個英文字串，Ctrl+Enter 執行　｜　支援 * 萬用字元",
                  font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a").pack(anchor="w", pady=(0, 4))
 
-        tk.Label(self._excel_panel, text="篩選語言（預設全選）：",
+        self._ql_filter = tk.Frame(self._excel_panel, bg="#27273a")   # 語言掃描模式下隱藏（沿用掃描語言勾選）
+        self._ql_filter.pack(fill="x")
+        tk.Label(self._ql_filter, text="篩選語言（預設全選）：",
                  font=("Microsoft JhengHei UI", 10, "bold"), fg="#a6adc8", bg="#27273a"
                  ).pack(anchor="w", pady=(0, 4))
         self._ql_lang_vars: dict[str, tk.BooleanVar] = {}
-        self._ql_cb_frame = tk.Frame(self._excel_panel, bg="#27273a")
+        self._ql_cb_frame = tk.Frame(self._ql_filter, bg="#27273a")
         self._ql_cb_frame.pack(fill="x", pady=(0, 4))
         self._rebuild_ql_checkboxes()
 
-        ql_sel_row = tk.Frame(self._excel_panel, bg="#27273a")
+        ql_sel_row = tk.Frame(self._ql_filter, bg="#27273a")
         ql_sel_row.pack(anchor="w", pady=(0, 8))
         tk.Button(ql_sel_row, text="全選", font=("Microsoft JhengHei UI", 10),
                   bg="#45475a", fg="white", relief="flat", padx=8, pady=2,
@@ -2765,6 +2823,9 @@ class App(tk.Tk):
                   command=lambda: [v.set(False) for v in self._ql_lang_vars.values()]
                   ).pack(side="left")
 
+        self._ql_scan_hint = tk.Label(self._excel_panel,
+                                      text="查詢語言沿用上方「選擇要掃描的語言」勾選（都沒勾 = 全部語言）",
+                                      font=("Microsoft JhengHei UI", 10), fg="#6c7086", bg="#27273a")
         self._ql_text = tk.Text(self._excel_panel, height=5, bg="#313244", fg="#ffffff",
                                 font=("Microsoft JhengHei UI", 12), relief="flat",
                                 insertbackground="white", padx=8, pady=6)
@@ -3016,14 +3077,6 @@ class App(tk.Tk):
             if not is_web:
                 # Re-apply proper coloring via _set_mode
                 self._set_mode(self._mode_var.get())
-            # Web 不支援 Ignore（Web 無 Module 概念，ignore 表無法比對）
-            if hasattr(self, '_ignore_btn_pick'):
-                _ig_state = "disabled" if is_web else "normal"
-                self._ignore_btn_pick.configure(state=_ig_state)
-                self._ignore_btn_clear.configure(state=_ig_state)
-                if is_web:
-                    self._ignore_path = None
-                    self._ignore_var.set("Web 不支援")
 
         if not init:
             # Load this app's saved paths (don't clear — restore from config)
@@ -3050,10 +3103,7 @@ class App(tk.Tk):
             _try_set(app_cfg.get("zip"),    self._zip_var,    "_zip_path")
             _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
             _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
-            if app_name != "Web":
-                _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
-            else:
-                self._ignore_var.set("Web 不支援")
+            _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
 
             scan_out = app_cfg.get("scan_out")
             if scan_out and Path(scan_out).parent.exists():
@@ -3114,6 +3164,14 @@ class App(tk.Tk):
                            selectcolor="#45475a", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
                                   padx=6, pady=2, sticky="w")
+        self._refresh_scroll()
+
+    def _refresh_scroll(self):
+        """內容高度改變（切換模式 / 語言勾選數量不同）後重算捲動範圍，避免下方內容捲不到。"""
+        def _do():
+            self.update_idletasks()   # 先讓 pack/grid 算完新的內容高度
+            self._on_frame_configure()
+        self.after_idle(_do)
 
     def _rebuild_ql_checkboxes(self):
         """Rebuild quick-lookup language checkboxes when App selection changes. Always defaults to all-selected."""
@@ -3138,6 +3196,7 @@ class App(tk.Tk):
                            selectcolor="#45475a", relief="flat", cursor="hand2"
                            ).grid(row=idx // cols, column=idx % cols,
                                   padx=6, pady=2, sticky="w")
+        self._refresh_scroll()
 
     # ── Mode toggle ───────────────────────────────────────────────────────────
 
@@ -3201,12 +3260,18 @@ class App(tk.Tk):
                     getattr(self, _p).pack_forget()
             if mode == "excel":
                 self._excel_panel.pack(fill="both", expand=True, padx=12, pady=10)
+                self._ql_scan_hint.pack_forget()
+                self._ql_filter.pack(fill="x", before=self._ql_text)
             elif mode == "scan":
                 self._scan_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
+                self._excel_panel.pack(fill="x", expand=False, padx=12, pady=(4, 10))   # 快速查詢也可用
+                self._ql_filter.pack_forget()
+                self._ql_scan_hint.pack(anchor="w", pady=(0, 6), before=self._ql_text)
             elif mode == "xplat":
                 self._xplat_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
             else:  # diff
                 self._diff_panel.pack(fill="x", expand=False, padx=12, pady=(10, 4))
+            self._refresh_scroll()
 
     def _clear_ignore(self):
         self._ignore_path = None
@@ -3421,7 +3486,8 @@ class App(tk.Tk):
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
-                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
+                                                  is_web=(_scan_app == "Web"))
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_scan_report(index, out_path, self._log, selected,
@@ -3730,13 +3796,19 @@ class App(tk.Tk):
             messagebox.showwarning("提示", "請先選取翻譯 Zip 檔"); return
         if self._busy:
             self._log_ql("⚠️  有任務執行中，請稍候再查詢", "err"); return
-        ql_allowed = {lang for lang, var in self._ql_lang_vars.items() if var.get()}
-        if not ql_allowed:
-            messagebox.showwarning("提示", "請至少選擇一個語言"); return
+        if self._mode_var.get() == "scan":
+            # 掃描模式：沿用掃描語言勾選；都沒勾 = 不篩選（全部語言）
+            ql_allowed = {lang for lang, var in self._scan_lang_vars.items() if var.get()}
+        else:
+            ql_allowed = {lang for lang, var in self._ql_lang_vars.items() if var.get()}
+            if not ql_allowed:
+                messagebox.showwarning("提示", "請至少選擇一個語言"); return
 
         self._set_busy(True)
         self._ql_btn.configure(state="disabled")
         self._progress.start(12)
+        if self._mode_var.get() == "scan":   # 掃描模式面板較高，結果在下方 log，自動捲到底
+            self.after(50, lambda: self._canvas.yview_moveto(1.0))
         def worker():
             try:
                 index, norm_index = self._load_index(self._zip_path)
@@ -3745,11 +3817,14 @@ class App(tk.Tk):
                                 if _ql_app == "Web"
                                 else APP_CONFIGS.get(_ql_app))
                 lang_label   = {v: k for k, v in target_langs.items()} if target_langs else {}
+                if _ql_app == "Web":
+                    lang_label.setdefault("en", "ENU")
                 allowed      = ql_allowed
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
-                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
+                                                  is_web=(_ql_app == "Web"))
 
                 self._log_ql("─────────────────────────────────────")
                 for q in queries:
@@ -3894,7 +3969,8 @@ class App(tk.Tk):
 
                 ignore_set = set()
                 if self._ignore_path and Path(self._ignore_path).exists():
-                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log)
+                    ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
+                                                  is_web=(selected_app == "Web"))
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
 
                 generate_excel(index, norm_index, excel_path, out_path, self._log,
@@ -3919,10 +3995,10 @@ class App(tk.Tk):
 
     def _center(self):
         self.update_idletasks()
-        w, h = 880, 750
-        self.geometry(f"{w}x{h}")
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        w, h = 880, min(900, sh - 100)   # 留空間給工作列，小螢幕自動縮小
+        self.geometry(f"{w}x{h}")
+        self.geometry(f"{w}x{h}+{(sw-w)//2}+{max((sh-h)//2 - 20, 0)}")
 
     # ── Changelog dialog ──────────────────────────────────────────────────────
 
