@@ -10,11 +10,19 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.15.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.16.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.16
+────────────────────────────────────────
+新功能
+  • 快速查詢 / 語言全掃描的語言勾選，簡碼後面加註語言名稱，例如「JPN (日文)」、
+    「HRV (克羅埃西亞文)」，不用再自己對照代碼，並依代碼字母順序排列；勾選排版由 4 欄改為 3 欄，
+    預設視窗寬度 880 → 960、最小寬度 700 → 950，確保最長的標籤也能完整顯示
+
+────────────────────────────────────────
 v2.15
 ────────────────────────────────────────
 新功能
@@ -864,6 +872,11 @@ def _is_non_english(s: str) -> bool:
     return non_latin * 2 > len(letters)
 
 _IMAGE_PATH_RE = re.compile(r'^\S+\.(?:jpe?g|png|webp|gif|svg|bmp|ico|avif|heic)$', re.I)
+
+def _lang_cb_text(code: str, lang: str) -> str:
+    """Checkbox label like 'JPN (日文)': code plus the Chinese name with 語 shown as 文."""
+    name = re.sub("語(?=$|\\()", "文", LANG_NAMES.get(lang, ""))
+    return f"{code} ({name})" if name else code
 
 def _is_image_path(s: str) -> bool:
     """Value is an image file path (e.g. web zip's localized tutorial-cover images)."""
@@ -2429,7 +2442,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(f"MUI Translation Tool  {APP_VERSION}")
         self.resizable(True, True)
-        self.minsize(700, 520)
+        self.minsize(950, 520)   # 再窄語言勾選的標籤（如「HRV (克羅埃西亞文)」）會被截斷
         self.configure(bg="#1e1e2e")
         self._cfg = load_config()
         self._zip_path = self._excel_path = self._out_path = None
@@ -2890,11 +2903,12 @@ class App(tk.Tk):
         app  = self._app_var.get()
         cfg  = APP_CONFIGS.get(app, {}) or {}
         langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
-        cols = 4
-        for idx, (code, lang) in enumerate(langs):
-            var = tk.BooleanVar(value=False)
-            self._scan_lang_vars[lang] = var
-            tk.Checkbutton(cb_frame, text=code, variable=var,
+        for code, lang in langs:
+            self._scan_lang_vars[lang] = tk.BooleanVar(value=False)   # 建立順序維持原樣（影響報告的語言順序）
+        cols = 3
+        for idx, (code, lang) in enumerate(sorted(langs, key=lambda cl: cl[0])):   # 畫面依代碼字母排序
+            var = self._scan_lang_vars[lang]
+            tk.Checkbutton(cb_frame, text=_lang_cb_text(code, lang), variable=var,
                            font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
                            activebackground="#27273a", activeforeground="#cba6f7",
                            selectcolor="#45475a", relief="flat", cursor="hand2"
@@ -3151,14 +3165,15 @@ class App(tk.Tk):
         else:
             cfg   = APP_CONFIGS.get(app, {}) or {}
             langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
-        cols  = 4
+        cols  = 3
         frames = [w for w in self._scan_panel.winfo_children() if isinstance(w, tk.Frame)]
         cb_frame = frames[0] if frames else self._scan_panel
         saved_langs = set(self._cfg.get(self._app_var.get(), {}).get("scan_langs", []))
-        for idx, (code, lang) in enumerate(langs):
-            var = tk.BooleanVar(value=lang in saved_langs)
-            self._scan_lang_vars[lang] = var
-            tk.Checkbutton(cb_frame, text=code, variable=var,
+        for code, lang in langs:
+            self._scan_lang_vars[lang] = tk.BooleanVar(value=lang in saved_langs)   # 建立順序維持原樣（影響報告的語言順序）
+        for idx, (code, lang) in enumerate(sorted(langs, key=lambda cl: cl[0])):   # 畫面依代碼字母排序
+            var = self._scan_lang_vars[lang]
+            tk.Checkbutton(cb_frame, text=_lang_cb_text(code, lang), variable=var,
                            font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
                            activebackground="#27273a", activeforeground="#cba6f7",
                            selectcolor="#45475a", relief="flat", cursor="hand2"
@@ -3186,11 +3201,11 @@ class App(tk.Tk):
         else:
             cfg   = APP_CONFIGS.get(app, {}) or {}
             langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
-        cols = 4
-        for idx, (code, lang) in enumerate(langs):
+        cols = 3
+        for idx, (code, lang) in enumerate(sorted(langs, key=lambda cl: cl[0])):   # 畫面依代碼字母排序
             var = tk.BooleanVar(value=True)
             self._ql_lang_vars[lang] = var
-            tk.Checkbutton(self._ql_cb_frame, text=code, variable=var,
+            tk.Checkbutton(self._ql_cb_frame, text=_lang_cb_text(code, lang), variable=var,
                            font=("Microsoft JhengHei UI", 9), fg="#cdd6f4", bg="#27273a",
                            activebackground="#27273a", activeforeground="#cba6f7",
                            selectcolor="#45475a", relief="flat", cursor="hand2"
@@ -3996,7 +4011,7 @@ class App(tk.Tk):
     def _center(self):
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = 880, min(900, sh - 100)   # 留空間給工作列，小螢幕自動縮小
+        w, h = min(960, sw - 40), min(900, sh - 100)   # 寬度需容得下「HRV (克羅埃西亞文)」等長標籤；小螢幕自動縮小
         self.geometry(f"{w}x{h}")
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{max((sh-h)//2 - 20, 0)}")
 
