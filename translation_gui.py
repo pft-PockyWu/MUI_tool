@@ -10,11 +10,25 @@ from collections import defaultdict, OrderedDict, Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.16.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.17.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.17
+────────────────────────────────────────
+新功能
+  • 字數上限檢查：spec.json 該 key 的 lines 設定為 2 行以上時，count 可能是「每行」也可能是
+    「整體」的上限，字串超過 count 時無法判斷是否真的超標 → 改用青綠色另外標示
+    「有多行，無法判斷字數長度是否超過上限」（沒超過 count 的字串不受影響，仍視為正常）
+    → 翻譯對照 sheet：青綠色粗體字，字尾標示「(字數，多行)」
+    → 翻譯問題報告 / 語言掃描報告：問題類型「有多行，無法判斷字數長度是否超過上限」青綠底
+      （同一英文字串下單行與多行的 key 會分開列）
+    → 快速查詢：顯示「⚠️有多行，無法判斷字數長度是否超過上限(上限值)」；
+      同字串下若有單行 key 確定超過，優先顯示「超過字數上限」
+    → 同時是多行又含變數時，以「多行」為準；說明 sheet 色彩圖例同步新增
+
+────────────────────────────────────────
 v2.16
 ────────────────────────────────────────
 新功能
@@ -920,6 +934,7 @@ def _spec_lines(spec: dict, key: str):
 
 LEN_ISSUE     = "超過字數上限"
 LEN_VAR_ISSUE = "超過字數上限（含變數，無法精確判斷）"
+LEN_MULTI_ISSUE = "有多行，無法判斷字數長度是否超過上限"
 
 def _has_var(s: str) -> bool:
     """String contains a {placeholder} (incl. ICU plural) or printf-style %@ / %d / %1$s — its
@@ -931,22 +946,40 @@ def _has_var(s: str) -> bool:
     s = s.replace("%%", "")   # 字面 %，不是變數
     return bool(_RE_PRINTF.search(s) or _RE_PRINTF2.search(s))
 
-def _len_issue(s: str) -> str:
-    """Issue label for an over-limit string: variable-bearing strings can't be judged exactly."""
+def _is_multi_line(spec: dict, key: str) -> bool:
+    """spec.json allows 2+ lines for this key — then `count` may mean per-line or total, so an
+    over-count string can't be judged (under count is fine either way)."""
+    lines = _spec_lines(spec, key)
+    return lines is not None and lines >= 2
+
+def _len_issue(s: str, multi: bool = False) -> str:
+    """Issue label for an over-limit string. Multi-line keys take priority (the limit itself is
+    ambiguous); otherwise variable-bearing strings can't be judged exactly."""
+    if multi:
+        return LEN_MULTI_ISSUE
     return LEN_VAR_ISSUE if _has_var(s) else LEN_ISSUE
+
+def _group_len_issue(keys: list, s: str, spec: dict) -> dict:
+    """{issue label: [keys]} for the keys whose limit `s` exceeds."""
+    out: dict = {}
+    for k in keys:
+        out.setdefault(_len_issue(s, _is_multi_line(spec, k)), []).append(k)
+    return out
 
 def _len_flag(all_keys: list, spec: dict, val: str) -> str:
     """Compact 快速查詢 marker when val's visual length exceeds any key's spec.json limit."""
-    limits = []
+    limits, multi_limits = [], []
     for k in all_keys:
         lim = _spec_limit(spec, k)
         if lim is not None and _visual_len(val) > lim:
-            limits.append(lim)
-    if not limits:
-        return ""
-    if _has_var(val):
-        return f"  ⚠️含變數，字數可能超過上限({min(limits)})，無法精確判斷"
-    return f"  ⚠️超過字數上限({min(limits)})"
+            (multi_limits if _is_multi_line(spec, k) else limits).append(lim)
+    if limits:   # 單行 key 確定超過，優先顯示
+        if _has_var(val):
+            return f"  ⚠️含變數，字數可能超過上限({min(limits)})，無法精確判斷"
+        return f"  ⚠️超過字數上限({min(limits)})"
+    if multi_limits:
+        return f"  ⚠️有多行，無法判斷字數長度是否超過上限({min(multi_limits)})"
+    return ""
 
 def _limit_cell(spec: dict, key: str, exp_count, exp_lines):
     """字數上限 column value for 翻譯對照.
@@ -1317,9 +1350,8 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         if key_limits:
             en_over_keys = [k for k, lim in key_limits.items()
                             if enu_val and _visual_len(enu_val) > lim]
-            if en_over_keys:
-                len_keys_str = "\n".join(_esc_nl(k) for k in en_over_keys)
-                _li = _len_issue(enu_val)
+            for _li, _ks in _group_len_issue(en_over_keys, enu_val, spec).items():
+                len_keys_str = "\n".join(_esc_nl(k) for k in _ks)
                 len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
                                else (enu_val, _li, len_keys_str))
                 bucket = groups.setdefault(len_grp_key, [])
@@ -1332,10 +1364,9 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                 if not val or is_garbled(val):
                     continue
                 over_keys = [k for k, lim in key_limits.items() if _visual_len(val) > lim]
-                if over_keys:
-                    label = lang_label.get(lang, lang)
-                    len_keys_str = "\n".join(_esc_nl(k) for k in over_keys)
-                    _li = _len_issue(val)
+                label = lang_label.get(lang, lang)
+                for _li, _ks in _group_len_issue(over_keys, val, spec).items():
+                    len_keys_str = "\n".join(_esc_nl(k) for k in _ks)
                     len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
                                    else (enu_val, _li, len_keys_str))
                     bucket = groups.setdefault(len_grp_key, [])
@@ -1387,6 +1418,7 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
         "與英文翻譯檔相同": "FFD740",
         LEN_ISSUE:         "64B5F6",
         LEN_VAR_ISSUE:     "B39DDB",
+        LEN_MULTI_ISSUE:   "4DB6AC",
     }
 
     wb = Workbook()
@@ -1921,7 +1953,7 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
     rpt.row_dimensions[1].height = 24
 
     ISSUE_COLORS = {"未翻譯 / 空白": "FF6B6B", "與英文翻譯檔相同": "FFD740", LEN_ISSUE: "64B5F6",
-                    LEN_VAR_ISSUE: "B39DDB"}
+                    LEN_VAR_ISSUE: "B39DDB", LEN_MULTI_ISSUE: "4DB6AC"}
     rpt_groups: dict[tuple, list] = OrderedDict()
 
     for rd in rows_data:
@@ -1938,12 +1970,12 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         if limit is not None:
             over_by_issue: dict[str, list] = {}
             if enu_val and _visual_len(enu_val) > limit:
-                over_by_issue.setdefault(_len_issue(enu_val), []).append("ENU")
+                over_by_issue.setdefault(_len_issue(enu_val, _is_multi_line(spec, key_name)), []).append("ENU")
             for lang in sorted_langs:
                 if lang == "en": continue
                 val = trans.get(lang, "")
                 if val and not is_garbled(val) and _visual_len(val) > limit:
-                    over_by_issue.setdefault(_len_issue(val), []).append(lang_label.get(lang, lang))
+                    over_by_issue.setdefault(_len_issue(val, _is_multi_line(spec, key_name)), []).append(lang_label.get(lang, lang))
             for _li, over_labels in over_by_issue.items():
                 len_keys_str = _esc_nl(key_name)
                 len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
@@ -2049,27 +2081,31 @@ def _build_legend_sheet(wb):
         ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
         ("  粉紅色粗體字", "翻譯超過字數上限（僅該 key 有 spec.json 設定時顯示，字尾括號為目前字數）"),
         ("  紫色粗體字", "超過字數上限，但字串含變數（{} 或 %@、%d、%1$s 等），實際長度會隨變數內容變動，無法精確判斷（字尾標示「含變數」）"),
+        ("  青綠色粗體字", "超過字數上限，但 spec.json 設定 2 行以上，無法判斷字數長度是否超過上限（字尾標示「多行」，需人工確認）"),
         ("", ""),
         ("翻譯問題報告色彩", ""),
         ("  紅底", "未翻譯 / 空白"),
         ("  黃底", "與英文翻譯檔相同（ENU）"),
         ("  藍底", "超過字數上限（module 內 spec.json 設定的字數限制）"),
         ("  紫底", "超過字數上限，但字串含變數（{} 或 %@、%d、%1$s 等），無法精確判斷（需人工確認實際顯示長度）"),
+        ("  青綠底", "有多行，無法判斷字數長度是否超過上限（spec.json 設定 2 行以上，字數上限可能是每行或整體，需人工確認）"),
         ("", ""), ("語言代碼", "語言名稱"),
     ] + list(LANG_NAMES.items()), 1):
         ca = ls.cell(row=ri, column=1, value=a)
         cb = ls.cell(row=ri, column=2, value=b)
-        bold = ri in (1, 9, 15)
+        bold = ri in (1, 10, 17)
         ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         cb.font = Font(name="Microsoft JhengHei UI", size=10, bold=bold)
         if ri == 2:  ca.fill = YELLOW
         if ri == 3:  ca.fill = RED
         if ri == 6:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
         if ri == 7:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="7E57C2")
-        if ri == 10: ca.fill = PatternFill("solid", fgColor="FF6B6B")
-        if ri == 11: ca.fill = PatternFill("solid", fgColor="FFD740")
-        if ri == 12: ca.fill = PatternFill("solid", fgColor="64B5F6")
-        if ri == 13: ca.fill = PatternFill("solid", fgColor="B39DDB")
+        if ri == 8:  ca.font = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="00897B")
+        if ri == 11: ca.fill = PatternFill("solid", fgColor="FF6B6B")
+        if ri == 12: ca.fill = PatternFill("solid", fgColor="FFD740")
+        if ri == 13: ca.fill = PatternFill("solid", fgColor="64B5F6")
+        if ri == 14: ca.fill = PatternFill("solid", fgColor="B39DDB")
+        if ri == 15: ca.fill = PatternFill("solid", fgColor="4DB6AC")
     ls.column_dimensions["A"].width = 22
     ls.column_dimensions["B"].width = 55
 
@@ -2235,6 +2271,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
     DIM_FONT      = Font(name="Microsoft JhengHei UI", size=10, color="aaaaaa")
     LEN_FONT      = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="E30BE8")
     LEN_VAR_FONT  = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="7E57C2")
+    LEN_MULTI_FONT = Font(name="Microsoft JhengHei UI", size=10, bold=True, color="00897B")
     GROUP_TOP     = Border(left=thin, right=thin,
                            top=Side(style="medium", color="302B63"),
                            bottom=Side(style="thin", color="DDDDDD"))
@@ -2348,8 +2385,12 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             if limit is not None and val and not is_garbled(val):
                 vlen       = _visual_len(val)
                 over_limit = vlen > limit
-                cell_text  = (f"{cell_text} ({vlen}，含變數)" if over_limit and _has_var(val)
-                              else f"{cell_text} ({vlen})")
+                if over_limit and _is_multi_line(spec, key_name):
+                    cell_text = f"{cell_text} ({vlen}，多行)"
+                elif over_limit and _has_var(val):
+                    cell_text = f"{cell_text} ({vlen}，含變數)"
+                else:
+                    cell_text = f"{cell_text} ({vlen})"
 
             c = ws.cell(row=ri, column=ci, value=cell_text)
             c.alignment, c.border = LEFT, border
@@ -2377,7 +2418,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             else:
                 c.font = D_FONT
             if over_limit:
-                c.font = LEN_VAR_FONT if _has_var(val) else LEN_FONT
+                c.font = (LEN_MULTI_FONT if _is_multi_line(spec, key_name)
+                          else LEN_VAR_FONT if _has_var(val) else LEN_FONT)
 
         # Not-found strings come from the server — expand one row per language
         if rd["not_found"] and rd["is_first"]:
