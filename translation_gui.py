@@ -11,11 +11,31 @@ from functools import lru_cache
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.21.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.22.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.22
+────────────────────────────────────────
+介面調整
+  • 語言勾選（語言全掃描 / 快速查詢）由 3 欄改為 4 欄，預設視窗寬度 960 → 1200、最小寬度
+    950 → 1100，右側面板變矮，底部 log 區不再被擠到只剩幾行
+    → 預設視窗下 log 區高度：語言全掃描 YMK 82px → 140px、Web 44px → 82px；
+      Excel 查詢 YMK 164px → 222px
+  • 語言全掃描的「輸出報告」改用左欄「輸出」那一列（掃描模式下標籤變成「輸出報告」），
+    不再另外放在右側面板：左欄輸入 / 輸出位置每個模式都在同一處，右側面板少一列、log 區再大一點
+    （YMK 140px → 179px）；Excel 查詢與掃描報告的輸出路徑仍各自記憶、不會互相覆蓋
+
+Bug 修正
+  • 翻譯索引快取：原本只靠「ZIP 路徑 + 修改時間 + 檔案大小」判斷快取是否過期，內容不同但大小和修改時間
+    剛好相同時會拿到舊結果 → 改用「ZIP 內容指紋」（zip 內每個檔案的名稱 + CRC + 大小，不需解壓縮，
+    約 5 毫秒）判斷：內容有任何不同就一定重建；內容相同只是重新下載（修改時間變了）則直接沿用快取
+    → 建立新快取後，自動刪除同名 ZIP 的舊快取（只比對完整的快取檔名格式，不會誤刪其他 ZIP 的快取），
+      不再因為常換 ZIP 讓暫存資料夾越積越大
+    → 更新後每個 ZIP 第一次載入會重建一次索引（約 10–30 秒），之後恢復直接載入
+
+────────────────────────────────────────
 v2.21
 ────────────────────────────────────────
 新功能
@@ -719,6 +739,25 @@ def _web_locale_entries(names) -> list:
         used_codes.add(code); used_langs.add(lang)
         out.append((st, code, lang, False))
     return out
+
+def _zip_fingerprint(zip_path: Path) -> str:
+    """Content fingerprint from the zip's central directory (name + CRC32 + size of every entry).
+    No decompression (~5 ms for a 1000-entry zip). "" when the file isn't a readable zip."""
+    import hashlib
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            data = "".join(f"{i.filename}|{i.CRC}|{i.file_size}" for i in zf.infolist())
+        return hashlib.md5(data.encode("utf-8", "replace")).hexdigest()[:12]
+    except Exception:
+        return ""
+
+def _prune_stale_caches(cache_dir: Path, stem: str, keep: Path):
+    """Drop older cache files of the same zip name (keeps the one just written)."""
+    pat = re.compile(rf"^lookup_{re.escape(stem)}_[0-9a-f]{{12}}\.json$")   # exact key suffix: never touches other stems
+    for f in cache_dir.glob("lookup_*.json"):
+        if f != keep and pat.match(f.name):
+            try: f.unlink()
+            except OSError: pass
 
 def _is_web_zip(zip_path: Path) -> bool:
     """Return True if zip contains en_US.json (web translation format)."""
@@ -2667,7 +2706,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(f"MUI Translation Tool  {APP_VERSION}")
         self.resizable(True, True)
-        self.minsize(950, 520)   # 再窄語言勾選的標籤（如「HRV (克羅埃西亞文)」）會被截斷
+        self.minsize(1100, 520)   # 語言勾選排 4 欄，再窄標籤（如「HRV (克羅埃西亞文)」）會被截斷
         self.configure(bg="#1e1e2e")
         self._cfg = load_config()
         self._zip_path = self._excel_path = self._out_path = None
@@ -2925,6 +2964,7 @@ class App(tk.Tk):
         self._zip_var   = tk.StringVar(value="尚未選取")
         self._excel_var = tk.StringVar(value="尚未選取")
         self._out_var   = tk.StringVar(value="尚未選取")
+        self._scan_out_var = tk.StringVar(value="尚未選取（將放在 Zip 同目錄）")   # 語言全掃描的輸出報告（顯示在左欄「輸出」那一列）
         self._ignore_var = tk.StringVar(value="未設定（可選）")
         self._len_ignore_var = tk.StringVar(value="未設定（可選）")
         self._zip_row   = self._make_file_row(fp, "📦 翻譯 Zip 檔:",  self._zip_var,   self._pick_zip,   row=0)
@@ -2970,7 +3010,8 @@ class App(tk.Tk):
         # Tooltips for standard file rows
         self._bind_row_tooltip(self._zip_row,   lambda: str(self._zip_path)    if self._zip_path    else None)
         self._bind_row_tooltip(self._excel_row, lambda: str(self._excel_path)  if self._excel_path  else None)
-        self._bind_row_tooltip(self._out_row,   lambda: str(self._out_path)    if self._out_path    else None)
+        self._bind_row_tooltip(self._out_row,   lambda: str(p) if (p := (self._scan_out_path if self._mode_var.get() == "scan"
+                                                                         else self._out_path)) else None)
         for w in (self._ignore_lbl, self._ignore_val):
             self._bind_tooltip(w, lambda: str(self._ignore_path) if self._ignore_path else None)
         for w in (self._len_ignore_lbl, self._len_ignore_val):
@@ -3154,7 +3195,7 @@ class App(tk.Tk):
         langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
         for code, lang in langs:
             self._scan_lang_vars[lang] = tk.BooleanVar(value=False)   # 建立順序維持原樣（影響報告的語言順序）
-        cols = 3
+        cols = 4
         for idx, (code, lang) in enumerate(sorted(langs, key=lambda cl: cl[0])):   # 畫面依代碼字母排序
             var = self._scan_lang_vars[lang]
             tk.Checkbutton(cb_frame, text=_lang_cb_text(code, lang), variable=var,
@@ -3176,14 +3217,6 @@ class App(tk.Tk):
                   cursor="hand2",
                   command=lambda: [v.set(False) for v in self._scan_lang_vars.values()]
                   ).pack(side="left")
-
-        scan_out_f = tk.Frame(self._scan_panel, bg="#27273a")
-        scan_out_f.pack(fill="x", pady=(0, 6), padx=(0, 12))
-        self._scan_out_var = tk.StringVar(value="尚未選取")
-        self._scan_out_row = self._make_file_row(scan_out_f, "💾 輸出報告:",
-                            self._scan_out_var, self._pick_scan_out,
-                            row=0, is_save=True)
-        self._bind_row_tooltip(self._scan_out_row, lambda: str(self._scan_out_path) if self._scan_out_path else None)
 
         # ── Bottom: progress + log (full width) ───────────────────────────────
         bot = tk.Frame(self._inner, bg=BG)
@@ -3353,7 +3386,7 @@ class App(tk.Tk):
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
             self._ignore_var.set("未設定（可選）")
             self._len_ignore_var.set("未設定（可選）")
-            self._scan_out_var.set("尚未選取")
+            self._scan_out_var.set("尚未選取（將放在 Zip 同目錄）")
             self._zip_old_var.set("尚未選取")
             self._diff_out_var.set("尚未選取")
             self._xplat_android_var.set("尚未選取")
@@ -3417,7 +3450,7 @@ class App(tk.Tk):
         else:
             cfg   = APP_CONFIGS.get(app, {}) or {}
             langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
-        cols  = 3
+        cols  = 4
         frames = [w for w in self._scan_panel.winfo_children() if isinstance(w, tk.Frame)]
         cb_frame = frames[0] if frames else self._scan_panel
         saved_langs = set(self._cfg.get(self._app_var.get(), {}).get("scan_langs", []))
@@ -3453,7 +3486,7 @@ class App(tk.Tk):
         else:
             cfg   = APP_CONFIGS.get(app, {}) or {}
             langs = [(code, lang) for code, lang in cfg.items() if lang != "en"]
-        cols = 3
+        cols = 4
         for idx, (code, lang) in enumerate(sorted(langs, key=lambda cl: cl[0])):   # 畫面依代碼字母排序
             var = tk.BooleanVar(value=True)
             self._ql_lang_vars[lang] = var
@@ -3518,7 +3551,18 @@ class App(tk.Tk):
         if hasattr(self, '_excel_row') and hasattr(self, '_out_row'):
             excel_mode = (mode == "excel")
             self._set_file_row_state(self._excel_row, excel_mode)
-            self._set_file_row_state(self._out_row,   excel_mode)
+            self._set_file_row_state(self._out_row,   mode in ("excel", "scan"))
+            # 語言全掃描沒有輸入 Excel，左欄「輸出」這一列改當掃描報告的輸出位置（路徑仍各自記憶）
+            if hasattr(self, '_scan_out_var'):
+                _lbl, _val, _btn = self._out_row
+                if mode == "scan":
+                    _lbl.configure(text="💾 輸出報告:")
+                    _val.configure(textvariable=self._scan_out_var)
+                    _btn.configure(command=self._pick_scan_out)
+                else:
+                    _lbl.configure(text="💾 輸出 Excel:")
+                    _val.configure(textvariable=self._out_var)
+                    _btn.configure(command=self._pick_out)
 
         if not init:
             # Hide all right panels first
@@ -3586,8 +3630,12 @@ class App(tk.Tk):
     def _load_index(self, zip_path: Path) -> tuple:
         import tempfile, hashlib
         zip_stat  = zip_path.stat()
+        # 內容指紋（zip 內每個檔案的名稱 + CRC + 大小）：內容有任何不同就一定重建，
+        # 不再只靠修改時間 + 檔案大小（兩者剛好相同但內容不同時會拿到舊快取）
+        fingerprint = _zip_fingerprint(zip_path)
         cache_key = hashlib.md5(
-            f"{zip_path}|{zip_stat.st_mtime}|{zip_stat.st_size}|{TOOL_VERSION}".encode()
+            (f"{zip_path}|{fingerprint}|{TOOL_VERSION}" if fingerprint
+             else f"{zip_path}|{zip_stat.st_mtime}|{zip_stat.st_size}|{TOOL_VERSION}").encode()
         ).hexdigest()[:12]
         cache_dir  = Path(tempfile.gettempdir()) / "TranslationTool"
         cache_dir.mkdir(exist_ok=True)
@@ -3630,6 +3678,7 @@ class App(tk.Tk):
                 json.dumps(out_list, ensure_ascii=False, separators=(",", ":")),
                 encoding="utf-8")
             self._log("💾 索引已快取 (下次更快)")
+            _prune_stale_caches(cache_dir, zip_path.stem, index_path)
         except Exception:
             self._log("⚠️  快取寫入失敗，不影響本次執行")
         return index, norm_index
@@ -4293,7 +4342,7 @@ class App(tk.Tk):
     def _center(self):
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = min(960, sw - 40), min(900, sh - 100)   # 寬度需容得下「HRV (克羅埃西亞文)」等長標籤；小螢幕自動縮小
+        w, h = min(1200, sw - 40), min(900, sh - 100)   # 加寬讓語言勾選排 4 欄，右側面板變矮、log 區才不會太擠；小螢幕自動縮小
         self.geometry(f"{w}x{h}")
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{max((sh-h)//2 - 20, 0)}")
 
