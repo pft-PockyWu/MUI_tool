@@ -11,11 +11,27 @@ from functools import lru_cache
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.20.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.21.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.21
+────────────────────────────────────────
+新功能
+  • 新增「📏 字數 Ignore」：可上傳字數警示的 Ignore 表，清單內的字串不再報字數相關警示
+    （有些字串已經無法再縮短，直接忽略不報錯）。Excel 查詢、語言全掃描、快速查詢皆套用
+    → 檔案格式就是工具輸出的「語言掃描報告」/「翻譯問題報告」：Module | ENU 翻譯檔字串 | 問題 Key | 語言 | 問題類型，
+      把報告裡要忽略的列留下來就能直接上傳
+    → 以 (Module, Key, 語言) 比對；語言欄的 ENU 代表 ENU 原文本身，也支援 ALL_LANGUAGES；
+      問題 Key 一格放多個 key（換行分隔）會自動拆開；Module 不分大小寫
+    → 「問題類型」欄不參與比對：該 (Module, Key, 語言) 的任何字數警示
+      （超過字數上限／含變數／有多行／全形字寬度邊界）都會被忽略
+    → 翻譯對照：被忽略的格子不上色（括號內仍顯示字數）；翻譯問題報告、語言掃描報告：不列出；
+      快速查詢：顯示「✅(字數 Ignore)」
+    → 與原本的 Ignore Excel（「與英文相同」）是兩個獨立的清單，路徑各 App 分開記憶
+
+────────────────────────────────────────
 v2.20
 ────────────────────────────────────────
 Bug 修正
@@ -1037,25 +1053,38 @@ def _len_status(s: str, limit: int, multi: bool = False):
         return LEN_VAR_ISSUE
     return LEN_ISSUE if _char_len(s) > limit else LEN_BORDER_ISSUE
 
-def _group_len_status(key_limits: dict, s: str, spec: dict) -> dict:
-    """{issue label: [keys]} over the keys (key → limit) that `s` doesn't comfortably fit."""
+def _len_ignored(len_ignore, module: str, key: str, lang: str) -> bool:
+    """(module, key, lang) is on the string-length ignore list ('en' = the ENU source itself)."""
+    return bool(len_ignore) and _in_ignore(len_ignore, module, key, lang)
+
+def _group_len_status(key_limits: dict, s: str, spec: dict, skip=None) -> dict:
+    """{issue label: [keys]} over the keys (key → limit) that `s` doesn't comfortably fit.
+    `skip(key)` → True drops a key (string-length ignore list)."""
     out: dict = {}
     for k, lim in key_limits.items():
+        if skip and skip(k):
+            continue
         st = _len_status(s, lim, _is_multi_line(spec, k))
         if st:
             out.setdefault(st, []).append(k)
     return out
 
-def _len_flag(all_keys: list, spec: dict, val: str) -> str:
-    """Compact 快速查詢 marker when val's visual length exceeds any key's spec.json limit."""
+def _len_flag(all_keys: list, spec: dict, val: str, ignored=None) -> str:
+    """Compact 快速查詢 marker when val's visual length exceeds any key's spec.json limit.
+    `ignored(key)` → True for keys on the string-length ignore list: they raise no warning,
+    and if that was the only warning a short "已 Ignore" note is shown instead."""
     by_status: dict = {}
+    n_ignored = 0
     for k in all_keys:
         lim = _spec_limit(spec, k)
         if lim is None:
             continue
         st = _len_status(val, lim, _is_multi_line(spec, k))
         if st:
-            by_status.setdefault(st, []).append(lim)
+            if ignored and ignored(k):
+                n_ignored += 1
+            else:
+                by_status.setdefault(st, []).append(lim)
     texts = {
         LEN_ISSUE:        "超過字數上限",
         LEN_VAR_ISSUE:    "含變數，字數可能超過上限",
@@ -1066,7 +1095,7 @@ def _len_flag(all_keys: list, spec: dict, val: str) -> str:
         if st in by_status:
             tail = "，無法精確判斷" if st == LEN_VAR_ISSUE else "，需人工檢查" if st == LEN_BORDER_ISSUE else ""
             return f"  ⚠️{texts[st]}({min(by_status[st])}){tail}"
-    return ""
+    return "  ✅(字數 Ignore)" if n_ignored else ""
 
 def _limit_cell(spec: dict, key: str, exp_count, exp_lines):
     """字數上限 column value for 翻譯對照.
@@ -1383,6 +1412,56 @@ def load_ignore_list(path: Path, target_langs: dict | None = None, log=None,
     return ignore
 
 
+def load_len_ignore_list(path: Path, target_langs: dict | None = None, log=None) -> set:
+    """
+    Parse the string-length ignore Excel: Module | ENU 翻譯檔字串 | 問題 Key | 語言 | 問題類型.
+    This is the tool's own scan / issue report layout, so a report can be trimmed and reused.
+    - 問題 Key may hold several keys in one cell (newline separated) — each is listed separately.
+    - 語言 is comma separated codes; "ENU" = the ENU source string itself, "ALL_LANGUAGES" = every language.
+    - 問題類型 is ignored on purpose: whatever length warning a (module, key, language) would
+      raise — over limit, variable, multi-line, full-width borderline — is suppressed.
+    Returns a set of (module lower-case, key, lang code | "*") for _in_ignore().
+    """
+    if not path or not path.exists():
+        return set()
+    import pandas as pd_
+    try:
+        df = pd_.read_excel(str(path), header=0)
+    except Exception:
+        return set()
+
+    key_ci, lang_ci = _web_ignore_cols(df)
+    if df.shape[1] <= max(key_ci, lang_ci):
+        if log:
+            log("⚠️  字數 Ignore 表欄位不足，無法讀取（需要 Module、問題 Key、語言 欄）")
+        return set()
+
+    code_to_lang = dict(target_langs or {})
+    code_to_lang.setdefault("ENU", "en")
+    ignore: set = set()
+    unknown_codes: set = set()
+    for _, row in df.iterrows():
+        module    = str(row.iloc[0]).strip().lower() if pd_.notna(row.iloc[0]) else ""
+        keys_raw  = str(row.iloc[key_ci]) if pd_.notna(row.iloc[key_ci]) else ""
+        langs_str = str(row.iloc[lang_ci]).strip() if pd_.notna(row.iloc[lang_ci]) else ""
+        keys = [_unesc_nl(k.strip()) for k in keys_raw.split("\n") if k.strip()]
+        if not module or not keys or not langs_str:
+            continue
+        if langs_str.upper() == "ALL_LANGUAGES":
+            ignore.update((module, k, "*") for k in keys)
+            continue
+        for code in [c.strip() for c in langs_str.split(",") if c.strip()]:
+            lang = code_to_lang.get(code.upper(), "")
+            if lang:
+                ignore.update((module, k, lang) for k in keys)
+            else:
+                unknown_codes.add(code)
+
+    if unknown_codes and log:
+        log(f"⚠️  字數 Ignore 表含未知語言代碼，已略過: {', '.join(sorted(unknown_codes))}")
+    return ignore
+
+
 def _in_ignore(ignore_set: set, module: str, key: str, lang: str) -> bool:
     """Check ignore_set with wildcard support for ALL_LANGUAGES entries.
     Module comparison is case-insensitive (zip folder casing and ignore-table
@@ -1399,7 +1478,8 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                          target_langs: dict | None = None,
                          ignore_set: set = None,
                          cancel_event=None,
-                         has_module: bool = True):
+                         has_module: bool = True,
+                         len_ignore: set = None):
     """
     Scan ALL strings in the index for selected languages.
     Output: one report sheet grouped by Module.
@@ -1435,7 +1515,8 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
             if lim is not None:
                 key_limits[k] = lim
         if key_limits:
-            for _li, _ks in (_group_len_status(key_limits, enu_val, spec).items() if enu_val else ()):
+            _skip_en = lambda k, m=module: _len_ignored(len_ignore, m, k, "en")
+            for _li, _ks in (_group_len_status(key_limits, enu_val, spec, _skip_en).items() if enu_val else ()):
                 len_keys_str = "\n".join(_esc_nl(k) for k in _ks)
                 len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
                                else (enu_val, _li, len_keys_str))
@@ -1449,7 +1530,8 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
                 if not val or is_garbled(val):
                     continue
                 label = lang_label.get(lang, lang)
-                for _li, _ks in _group_len_status(key_limits, val, spec).items():
+                _skip = lambda k, m=module, lg=lang: _len_ignored(len_ignore, m, k, lg)
+                for _li, _ks in _group_len_status(key_limits, val, spec, _skip).items():
                     len_keys_str = "\n".join(_esc_nl(k) for k in _ks)
                     len_grp_key = ((module, enu_val, _li, len_keys_str) if has_module
                                    else (enu_val, _li, len_keys_str))
@@ -2028,7 +2110,8 @@ def _build_test_sheet(wb, test_rows_dedup: list, log, has_module: bool = True):
 
 
 def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
-                       lang_label: dict, ignore_set, has_module: bool = True):
+                       lang_label: dict, ignore_set, has_module: bool = True,
+                       len_ignore: set = None):
     """Append 翻譯問題報告 sheet to wb. Returns (n_groups, n_issues)."""
     rpt = wb.create_sheet("翻譯問題報告")
     RPT_H_FILL = PatternFill("solid", fgColor="C0392B")
@@ -2062,13 +2145,15 @@ def _build_issue_sheet(wb, rows_data: list, sorted_langs: list,
         if limit is not None:
             over_by_issue: dict[str, list] = {}
             multi = _is_multi_line(spec, key_name)
-            st = _len_status(enu_val, limit, multi) if enu_val else None
+            st = (_len_status(enu_val, limit, multi)
+                  if enu_val and not _len_ignored(len_ignore, module, key_name, "en") else None)
             if st:
                 over_by_issue.setdefault(st, []).append("ENU")
             for lang in sorted_langs:
                 if lang == "en": continue
                 val = trans.get(lang, "")
-                st = _len_status(val, limit, multi) if val and not is_garbled(val) else None
+                st = (_len_status(val, limit, multi)
+                      if val and not is_garbled(val) and not _len_ignored(len_ignore, module, key_name, lang) else None)
                 if st:
                     over_by_issue.setdefault(st, []).append(lang_label.get(lang, lang))
             for _li, over_labels in over_by_issue.items():
@@ -2214,7 +2299,7 @@ def _build_legend_sheet(wb):
 def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
                    output_xlsx: Path, log, target_langs: dict | None = None,
                    ignore_set: set = None, cancel_event=None,
-                   has_module: bool = True):
+                   has_module: bool = True, len_ignore: set = None):
     import pandas as pd_
     import fnmatch as _fnmatch
     df       = pd_.read_excel(str(input_xlsx), header=0)
@@ -2486,6 +2571,8 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
             cell_text  = _xl_safe(_esc_nl(val)) or None
             if limit is not None and val and not is_garbled(val):
                 len_status = _len_status(val, limit, _is_multi_line(spec, key_name))
+                if len_status and _len_ignored(len_ignore, rd.get("module", ""), key_name, lang):
+                    len_status = None   # 字數 Ignore：不上色，括號內仍顯示字數
                 note = {LEN_MULTI_ISSUE: "，多行", LEN_VAR_ISSUE: "，含變數"}.get(len_status, "")
                 cell_text = f"{cell_text} ({_len_disp(val)}{note})"
 
@@ -2564,7 +2651,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
 
     # ── Sheet 3: 翻譯問題報告 ────────────────────────────────────────────────
     n_groups, n_issues = _build_issue_sheet(wb, rows_data, sorted_langs, lang_label, ignore_set,
-                                            has_module=has_module)
+                                            has_module=has_module, len_ignore=len_ignore)
     log(f"📋 翻譯問題報告: {n_groups} 筆（{n_issues} 個問題）")
 
     # ── Sheet 4: 說明 ─────────────────────────────────────────────────────────
@@ -2585,6 +2672,7 @@ class App(tk.Tk):
         self._cfg = load_config()
         self._zip_path = self._excel_path = self._out_path = None
         self._ignore_path = None
+        self._len_ignore_path = None       # 字數警示 Ignore 表
         self._zip_old_path = None          # diff mode: old version zip
         self._diff_out_path = None         # diff mode: output xlsx
         self._xplat_android_path = None    # xplat mode: android zip
@@ -2668,6 +2756,7 @@ class App(tk.Tk):
         _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
         _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
         _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+        _try_set(app_cfg.get("len_ignore"), self._len_ignore_var, "_len_ignore_path")
 
         scan_out = app_cfg.get("scan_out")
         if scan_out and Path(scan_out).parent.exists():
@@ -2705,6 +2794,8 @@ class App(tk.Tk):
             self._cfg[app]["out"]    = str(self._out_path)
         if self._ignore_path:
             self._cfg[app]["ignore"] = str(self._ignore_path)
+        if self._len_ignore_path:
+            self._cfg[app]["len_ignore"] = str(self._len_ignore_path)
         if self._scan_out_path:
             self._cfg[app]["scan_out"] = str(self._scan_out_path)
         if self._zip_old_path:
@@ -2835,6 +2926,7 @@ class App(tk.Tk):
         self._excel_var = tk.StringVar(value="尚未選取")
         self._out_var   = tk.StringVar(value="尚未選取")
         self._ignore_var = tk.StringVar(value="未設定（可選）")
+        self._len_ignore_var = tk.StringVar(value="未設定（可選）")
         self._zip_row   = self._make_file_row(fp, "📦 翻譯 Zip 檔:",  self._zip_var,   self._pick_zip,   row=0)
         self._excel_row = self._make_file_row(fp, "📄 輸入 Excel:",   self._excel_var, self._pick_excel, row=1)
         self._out_row   = self._make_file_row(fp, "💾 輸出 Excel:",   self._out_var,   self._pick_out,   row=2, is_save=True)
@@ -2857,6 +2949,23 @@ class App(tk.Tk):
                   activeforeground="white", relief="flat", padx=8, pady=2,
                   cursor="hand2", command=self._clear_ignore)
         self._ignore_btn_clear.pack(side="left")
+        # String-length ignore row (same look as the Ignore row)
+        self._len_ignore_lbl = tk.Label(fp, text="📏 字數 Ignore:", font=("Microsoft JhengHei UI", 11), fg="#cdd6f4",
+                 bg=BG, anchor="w")
+        self._len_ignore_lbl.grid(row=4, column=0, sticky="w", pady=4)
+        self._len_ignore_val = tk.Label(fp, textvariable=self._len_ignore_var, font=("Microsoft JhengHei UI", 9), fg="#a6adc8",
+                 bg=BG, anchor="w")
+        self._len_ignore_val.grid(row=4, column=1, sticky="ew", padx=(4, 0))
+        len_ig_btns = tk.Frame(fp, bg=BG)
+        len_ig_btns.grid(row=4, column=2, padx=(4, 0))
+        tk.Button(len_ig_btns, text="選取", font=("Microsoft JhengHei UI", 10),
+                  bg="#45475a", fg="white", activebackground="#3d59a1",
+                  activeforeground="white", relief="flat", padx=8, pady=2,
+                  cursor="hand2", command=self._pick_len_ignore).pack(side="left", padx=(0, 3))
+        tk.Button(len_ig_btns, text="清除", font=("Microsoft JhengHei UI", 10),
+                  bg="#2d2030", fg="#f38ba8", activebackground="#3a2535",
+                  activeforeground="white", relief="flat", padx=8, pady=2,
+                  cursor="hand2", command=self._clear_len_ignore).pack(side="left")
 
         # Tooltips for standard file rows
         self._bind_row_tooltip(self._zip_row,   lambda: str(self._zip_path)    if self._zip_path    else None)
@@ -2864,6 +2973,8 @@ class App(tk.Tk):
         self._bind_row_tooltip(self._out_row,   lambda: str(self._out_path)    if self._out_path    else None)
         for w in (self._ignore_lbl, self._ignore_val):
             self._bind_tooltip(w, lambda: str(self._ignore_path) if self._ignore_path else None)
+        for w in (self._len_ignore_lbl, self._len_ignore_val):
+            self._bind_tooltip(w, lambda: str(self._len_ignore_path) if self._len_ignore_path else None)
 
         # Diff mode file pickers (hidden by default)
         self._diff_fp = tk.Frame(fp_container, bg=BG)
@@ -3233,6 +3344,7 @@ class App(tk.Tk):
         if not init:
             # Load this app's saved paths (don't clear — restore from config)
             self._zip_path = self._excel_path = self._out_path = self._ignore_path = None
+            self._len_ignore_path = None
             self._scan_out_path = None
             self._zip_old_path = self._diff_out_path = None
             self._xplat_android_path = self._xplat_ios_path = self._xplat_out_path = None
@@ -3240,6 +3352,7 @@ class App(tk.Tk):
             self._excel_var.set("尚未選取")
             self._out_var.set("尚未選取（將放在 Excel 同目錄）")
             self._ignore_var.set("未設定（可選）")
+            self._len_ignore_var.set("未設定（可選）")
             self._scan_out_var.set("尚未選取")
             self._zip_old_var.set("尚未選取")
             self._diff_out_var.set("尚未選取")
@@ -3256,6 +3369,7 @@ class App(tk.Tk):
             _try_set(app_cfg.get("excel"),  self._excel_var,  "_excel_path")
             _try_set(app_cfg.get("out"),    self._out_var,    "_out_path")
             _try_set(app_cfg.get("ignore"), self._ignore_var, "_ignore_path")
+            _try_set(app_cfg.get("len_ignore"), self._len_ignore_var, "_len_ignore_path")
 
             scan_out = app_cfg.get("scan_out")
             if scan_out and Path(scan_out).parent.exists():
@@ -3433,6 +3547,14 @@ class App(tk.Tk):
         app = self._app_var.get()
         if app in self._cfg:
             self._cfg[app].pop("ignore", None)
+        self._save_app_paths()
+
+    def _clear_len_ignore(self):
+        self._len_ignore_path = None
+        self._len_ignore_var.set("未設定（可選）")
+        app = self._app_var.get()
+        if app in self._cfg:
+            self._cfg[app].pop("len_ignore", None)   # _save_app_paths 只寫非空值
         self._save_app_paths()
 
     def _clear_cache(self):
@@ -3642,10 +3764,14 @@ class App(tk.Tk):
                     ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
                                                   is_web=(_scan_app == "Web"))
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
+                len_ignore = set()
+                if self._len_ignore_path and Path(self._len_ignore_path).exists():
+                    len_ignore = load_len_ignore_list(Path(self._len_ignore_path), target_langs, self._log)
+                    self._log(f"📏 字數 Ignore list: {len(len_ignore)} 筆")
 
                 generate_scan_report(index, out_path, self._log, selected,
                                      target_langs, ignore_set, self._cancel_event,
-                                     has_module=has_module)
+                                     has_module=has_module, len_ignore=len_ignore)
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！報告已儲存至:\n   {out_path}")
 
@@ -3704,6 +3830,15 @@ class App(tk.Tk):
         if p:
             self._ignore_path = Path(p)
             self._ignore_var.set(self._fmt_name(Path(p).name))
+            self._save_app_paths()
+
+    def _pick_len_ignore(self):
+        p = filedialog.askopenfilename(title="選取字數 Ignore Excel（語言掃描報告 / 翻譯問題報告格式）",
+                                       filetypes=[("Excel files", "*.xlsx *.xls"),
+                                                  ("All files", "*.*")])
+        if p:
+            self._len_ignore_path = Path(p)
+            self._len_ignore_var.set(self._fmt_name(Path(p).name))
             self._save_app_paths()
 
     def _pick_zip_old(self):
@@ -3978,6 +4113,9 @@ class App(tk.Tk):
                 if self._ignore_path and Path(self._ignore_path).exists():
                     ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
                                                   is_web=(_ql_app == "Web"))
+                len_ignore = set()
+                if self._len_ignore_path and Path(self._len_ignore_path).exists():
+                    len_ignore = load_len_ignore_list(Path(self._len_ignore_path), target_langs)
 
                 self._log_ql("─────────────────────────────────────")
                 for q in queries:
@@ -4015,7 +4153,8 @@ class App(tk.Tk):
                                                 status = "❌"
                                         else:
                                             status = "✅"
-                                        flag = _len_flag(all_keys, spec, val)
+                                        flag = _len_flag(all_keys, spec, val,
+                                                         lambda k, p=proj, lg=lang: _len_ignored(len_ignore, p, k, lg))
                                         self._log_ql(f"      {proj}  [{code}]  {status}  {val}  ({_len_disp(val)}){flag}", "info")
                         continue
 
@@ -4058,7 +4197,8 @@ class App(tk.Tk):
                                     status = "❌"
                             else:
                                 status = "✅"
-                            flag = _len_flag(all_keys, spec, val)
+                            flag = _len_flag(all_keys, spec, val,
+                                             lambda k, p=proj, lg=lang: _len_ignored(len_ignore, p, k, lg))
                             self._log_ql(f"   {proj}  [{code}]  {status}  {val}  ({_len_disp(val)}){flag}", "info")
                 self._log_ql("─────────────────────────────────────")
 
@@ -4125,10 +4265,14 @@ class App(tk.Tk):
                     ignore_set = load_ignore_list(Path(self._ignore_path), target_langs, self._log,
                                                   is_web=(selected_app == "Web"))
                     self._log(f"🚫 Ignore list: {len(ignore_set)} 筆")
+                len_ignore = set()
+                if self._len_ignore_path and Path(self._len_ignore_path).exists():
+                    len_ignore = load_len_ignore_list(Path(self._len_ignore_path), target_langs, self._log)
+                    self._log(f"📏 字數 Ignore list: {len(len_ignore)} 筆")
 
                 generate_excel(index, norm_index, excel_path, out_path, self._log,
                                target_langs, ignore_set, self._cancel_event,
-                               has_module=has_module)
+                               has_module=has_module, len_ignore=len_ignore)
                 if self._cancel_event.is_set(): return
                 self._log(f"\n🎉 完成！檔案已儲存至:\n   {out_path}")
 
