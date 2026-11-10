@@ -7,14 +7,40 @@ MUI Translation Tool — GUI Version
 import json, re, sys, zipfile, threading, heapq, os, unicodedata
 from pathlib import Path
 from collections import defaultdict, OrderedDict, Counter
+from functools import lru_cache
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_VERSION  = "v2.18.BUILD_DATETIME"   # replaced by build script at package time
+APP_VERSION  = "v2.20.BUILD_DATETIME"   # replaced by build script at package time
 APP_AUTHOR   = "Pocky Wu"
 TOOL_VERSION = "8"   # bump when index structure changes (forces cache rebuild)
 
 CHANGELOG = """\
+v2.20
+────────────────────────────────────────
+Bug 修正
+  • 語言全掃描：同一個英文字串在同一個 Module 下有多個 key，且各 key 的翻譯不一樣時，
+    「與英文翻譯檔相同」是拿整組的代表值（第一個有翻譯的 key）一刀切判斷，再把整組 key 全部列出，
+    造成誤報與漏報（例如 AI Replace 底下 4 個 key，IND 只有 3 個沒翻、iap_store_feature_ai_replace
+    已翻成 Ganti AI，卻被一起列為「與英文翻譯檔相同」；反過來，代表值有翻、其他 key 沒翻的也會被漏掉）
+    → 改為逐 key 用各自的翻譯判斷，只列出真正跟英文相同的 key
+    → 以 YMK Android 6.50 的翻譯檔測試：42 筆(key,語言)不再誤報、37 筆原本被蓋住的現在會被抓到，抽樣對照原始 arb 檔皆正確
+    → Excel 查詢的翻譯對照 / 問題報告本來就是逐 key 判斷，不受影響
+
+────────────────────────────────────────
+v2.19
+────────────────────────────────────────
+新功能
+  • 「最長翻譯」改用依文字種類加權的估算寬度：原本只有全形字（韓文、中文、日文）算 2、其餘一律算 1，
+    但實測各文字的字寬不同（西里爾、希臘字母比拉丁寬約 14%，阿拉伯文窄約 26%，印地文寬約 24%，
+    泰米爾文約 2 倍），導致黃色標記常常標錯語言。改為各文字乘上實測倍率後再比較
+    → 以實際翻譯資料量測像素寬度對照，標黃的最長語言包含「真正最寬」者的比例由 68% 提高到 82%
+    → 影響：翻譯對照 sheet 的黃色 / 淡黃色標記（含 Test Sheet 內容）、快速查詢的排序
+    → 不影響：字數上限判斷（仍用字元數；全形字寬度的琥珀色邊界狀態不變）
+    → 倍率是以本機字型（Microsoft JhengHei UI 10pt）量測，實際 App 的字型不同會有差異，僅供估算
+  • 說明 sheet 黃色底圖例文字同步調整
+
+────────────────────────────────────────
 v2.18
 ────────────────────────────────────────
 新功能
@@ -921,6 +947,26 @@ def _char_len(s: str) -> int:
     (Thai tone marks, Arabic diacritics…) excluded, same as _visual_len."""
     return sum(1 for c in s if unicodedata.category(c) not in ('Mn', 'Mc', 'Me'))
 
+# 各文字相對於拉丁字母的估計寬度倍率：以 Microsoft JhengHei UI 10pt 對實際翻譯字串量測的中位數，
+# 僅供估算「哪個語言最長」；實際 App 的字型不同會有差異。未列出的文字視為 1，全形字（W/F）固定為 2。
+_SCRIPT_WIDTH = {
+    "CYRILLIC": 1.14, "GREEK": 1.14, "ARABIC": 0.74, "THAI": 1.06,
+    "HEBREW": 1.01, "DEVANAGARI": 1.24, "TAMIL": 2.08,
+}
+
+@lru_cache(maxsize=None)
+def _char_width(c: str) -> float:
+    if unicodedata.category(c) in ('Mn', 'Mc', 'Me'):
+        return 0.0
+    if unicodedata.east_asian_width(c) in ('W', 'F'):
+        return 2.0
+    return _SCRIPT_WIDTH.get(unicodedata.name(c, "").split(" ", 1)[0], 1.0)
+
+def _est_width(s: str) -> int:
+    """Estimated display width, in Latin-letter widths: full-width chars count 2, other scripts
+    are weighted by _SCRIPT_WIDTH, combining marks 0. An estimate for ranking only — not exact."""
+    return round(sum(_char_width(c) for c in s))
+
 def _len_disp(s: str) -> str:
     """'8' for ordinary text, '8，全形寬15' when full-width characters make the visual width differ."""
     c, v = _char_len(s), _visual_len(s)
@@ -1420,17 +1466,23 @@ def generate_scan_report(index: dict, output_xlsx: Path, log,
             label = lang_label.get(lang, lang)
             missing_keys = key_missing.get(lang, [])  # keys specifically missing this lang
 
+            key_trans = trans.get("_key_trans", {})
+            # 同一英文字串下多個 key 的翻譯可能不同；「與英文相同」要逐 key 用自己的翻譯判斷，
+            # 不能拿整組代表值（第一個有值的 key）一刀切，否則有翻的 key 會被一起列進去
+            same_keys = [k for k in all_keys
+                         if enu_val and (key_trans.get(k, {}).get(lang) or "").strip() == enu_val.strip()]
+
             if not val or is_garbled(val):
                 issue    = "未翻譯 / 空白"
                 keys_str = "\n".join(_esc_nl(k) for k in all_keys)
-            elif enu_val and val.strip() == enu_val.strip():
+            elif enu_val and (same_keys or val.strip() == enu_val.strip()):
                 # Only report keys NOT covered by ignore_set; skip entirely if none remain
-                report_keys = all_keys or [""]
+                report_keys = same_keys or all_keys or [""]
                 if ignore_set:
                     report_keys = [k for k in report_keys
                                    if not _in_ignore(ignore_set, module, k, lang)]
-                    if not report_keys:
-                        continue
+                if not report_keys:
+                    continue
                 issue    = "與英文翻譯檔相同"
                 keys_str = "\n".join(_esc_nl(k) for k in report_keys)
             elif missing_keys:
@@ -2118,7 +2170,7 @@ def _build_legend_sheet(wb):
     ls = wb.create_sheet("說明")
     for ri, (a, b) in enumerate([
         ("色彩說明", ""),
-        ("  黃色底", "該語言在此 module 翻譯中字串最長（唯一最長才標示）"),
+        ("  黃色底", "該語言在此 module 翻譯中估算顯示寬度最長（並列最長都標示；依文字種類加權估算，非精確值）"),
         ("  紅色底", "未翻譯、空白、亂碼、或翻譯與英文相同"),
         ("  橘色字", "模糊比對（Excel 數字對應翻譯檔變數，hover 看原始字串）"),
         ("  黃色警示欄", "查無字串（此英文字串在翻譯檔中找不到）"),
@@ -2355,7 +2407,7 @@ def generate_excel(index: dict, norm_index: dict, input_xlsx: Path,
         limit     = _spec_limit(spec, key_name)
         lines_lim = _spec_lines(spec, key_name)
 
-        valid    = {l: _visual_len(v) for l, v in trans.items()
+        valid    = {l: _est_width(v) for l, v in trans.items()
                     if l in sorted_langs and v and not is_garbled(v)
                     and l != "en" and v.strip() != en_val.strip()
                     and (not enu_val or v.strip() != enu_val.strip())}
@@ -3944,7 +3996,7 @@ class App(tk.Tk):
                                     rows = sorted(
                                         ((lang, val) for lang, val in pt.items()
                                          if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
-                                        key=lambda kv: _visual_len(kv[1]), reverse=True
+                                        key=lambda kv: _est_width(kv[1]), reverse=True
                                     )
                                     all_keys = pt.get("_all_keys", [])
                                     spec     = pt.get("_spec", {})
@@ -3987,7 +4039,7 @@ class App(tk.Tk):
                         rows = sorted(
                             ((lang, val) for lang, val in pt.items()
                              if not lang.startswith('_') and (lang == "en" or not allowed or lang in allowed)),
-                            key=lambda kv: _visual_len(kv[1]), reverse=True
+                            key=lambda kv: _est_width(kv[1]), reverse=True
                         )
                         all_keys = pt.get("_all_keys", [])
                         spec     = pt.get("_spec", {})
